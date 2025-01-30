@@ -125,12 +125,15 @@ def read_file(
     table['part_pz'] = p4.pz
     table['part_energy'] = p4.energy
     table['part_mass'] = p4.mass
-
-    x_particles = np.stack([ak.to_numpy(_pad(table[n], maxlen=max_num_particles)) for n in particle_features], axis=1)
+    if len(particle_features):
+        print(particle_features)
+        x_particles = np.stack([ak.to_numpy(_pad(table[n], maxlen=max_num_particles)) for n in particle_features], axis=1)
+    else:
+        x_particles = None
     if len(event_level_features):
         x_event = np.stack([ak.to_numpy(table[n]).astype('float32') for n in event_level_features], axis=1)
     else:
         x_event = None
-    y = np.stack([ak.to_numpy(table[n]).astype('int') for n in labels], axis=1)
+    y = np.stack([(ak.to_numpy(table[n])=='lvbb')*1+(ak.to_numpy(table[n])=='qqbb')*2 if n=='truth_W_decay_mode' else ak.to_numpy(table[n]).astype('int') for n in labels], axis=1)
 
     return x_particles, x_event, y

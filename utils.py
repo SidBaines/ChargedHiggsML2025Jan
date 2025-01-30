@@ -98,3 +98,67 @@ def Rotate4VectorPhiEta(x, # (n_batch[,n_obj],)
     newnewx = newx*np.cos(theta) + z*np.sin(theta)
     newz = -newx*np.sin(theta) + z*np.cos(theta)
     return newnewx, newy, newz, t
+
+
+
+
+
+
+# TODO kinda sketch to just have loose stuff if I'm going to import it...
+# Create a mapping from the dsid/decay-type pair to integers, for the purposes of binarising data.
+dsid_set = np.array([363355,363356,363357,363358,363359,363360,363489,407342,407343,407344,
+            407348,407349,410470,410646,410647,410654,410655,411073,411074,411075,
+            411077,411078,412043,413008,413023,510115,510116,510117,510118,510119,
+            510120,510121,510122,510123,510124,700320,700321,700322,700323,700324,
+            700325,700326,700327,700328,700329,700330,700331,700332,700333,700334,
+            700338,700339,700340,700341,700342,700343,700344,700345,700346,700347,
+            700348,700349,
+            ]) # Try not to change this often - have to re-binarise if we do!
+DSID_MASS_MAPPING = {510115:0.8, 510116:0.9, 510117:1.0, 510118:1.2, 510119:1.4, 510120:1.6, 510121:1.8, 510122:2.0, 510123:2.5, 510124:3.0}
+MASS_DSID_MAPPING = {v: k for k, v in DSID_MASS_MAPPING.items()} # Create inverse dictionary
+# dsid_set = np.array([410470, 510117, 510123])
+types_set = np.array([-2, 1, 2])  # Try not to change this often - have to re-binarise if we do!
+dsid_type_pair_to_int = {}
+# Also, create dicts to handle different types of decoding:
+#   - one to a training label, which will be an integer to be one-hot encoded
+#   - the other to an evaluation label, which will tell us more info about the sample for plotting/testing performance
+decode_int_to_training_label = {}
+decode_int_to_evaluation_label = {}
+counter = 0  # Start integer for mapping
+for x in dsid_set:
+    for y in types_set:
+        dsid_type_pair_to_int[(x, y)] = counter
+        if (500000<x) and (x<600000):
+            if y == 1:
+                decode_int_to_training_label[counter] = 1
+            elif (y==-2) or (y==2):
+                decode_int_to_training_label[counter] = 2
+            else:
+                assert(False)
+        else:
+            decode_int_to_training_label[counter] = 0
+        decode_int_to_evaluation_label[counter] = [x,y] # Just put all info in for now
+        counter += 1
+
+dsid_type_int_to_pair = {v: k for k, v in dsid_type_pair_to_int.items()} # Create inverse dictionary
+mapping_array_pair_to_int = np.zeros((len(dsid_set), len(types_set)), dtype=int)
+for (x, y), val in dsid_type_pair_to_int.items():
+    i = np.where(dsid_set == x)[0][0]
+    j = np.where(types_set == y)[0][0]
+    mapping_array_pair_to_int[i, j] = val
+
+def decode_y_eval_to_info(y_int_array):
+    # Extract DSID and decay_mode for each entry in y_int_array
+    dsid_array = np.array([decode_int_to_evaluation_label[y][0] for y in y_int_array])
+    decay_mode_array = np.array([decode_int_to_evaluation_label[y][1] for y in y_int_array])
+    # Initialize mass and decay_mode_real arrays with default values
+    mass_array = np.zeros_like(dsid_array, dtype=float)
+    decay_mode_real_array = np.zeros_like(decay_mode_array, dtype=int)
+    # Apply conditions for DSID range (500000 < dsid < 600000)
+    valid_dsid_mask = (500000 < dsid_array) & (dsid_array < 600000)
+    # For valid DSID values, lookup mass and calculate decay_mode_real
+    mass_array[valid_dsid_mask] = np.vectorize(DSID_MASS_MAPPING.get)(dsid_array[valid_dsid_mask])
+    # Define decay_mode_real based on decay_mode values
+    decay_mode_real_array[valid_dsid_mask & (decay_mode_array == 1)] = 1
+    decay_mode_real_array[valid_dsid_mask & ((decay_mode_array == 2) | (decay_mode_array == -2))] = 2
+    return mass_array, decay_mode_real_array, dsid_array

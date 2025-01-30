@@ -11,9 +11,9 @@ from jaxtyping import Float
 import einops
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-mpl.use('Agg')
+# mpl.use('Agg') # If you want to run in batch mode, and not see the plots made
 # from utils import save_current_script#, decode_y_eval_to_info
-from mynewdataloader import ProportionalMemoryMappedDataset
+from mynewdataloaderHighLevel import ProportionalMemoryMappedDatasetHighLevel
 from transformer_lens import HookedTransformer, HookedTransformerConfig
 from transformer_lens.hook_points import HookPoint
 from jaxtyping import Float, Int
@@ -46,56 +46,54 @@ def save_current_script(destination_directory):
     destination_path = os.path.join(destination_directory, os.path.basename(current_script_path))
     shutil.copy(current_script_path, destination_path)
     print(f"This script copied to: {destination_path}")
-save_current_script('%s'%(saveDir))
+# save_current_script('%s'%(saveDir))
 
 # Some choices about the training process
 # Assumes that the data has already been binarised
-SHUFFLE_OBJECTS = False
-CONVERT_TO_PT_PHI_ETA_M = False
 MET_CUT_ON = True
-N_TARGETS = 3 # Number of target classes (needed for one-hot encoding)
-N_CTX = 7 # the six types of object, plus one for 'no object;. We need to hardcode this unfortunately
+N_TARGETS = 2 # Number of target classes (needed for one-hot encoding)
 BIN_WRITE_TYPE=np.float32
-max_n_objs = 14 # BE CAREFUL because this might change and if it does you ahve to rebinarise
-N_Real_Vars = 4 # x, y, z, energy, d0val, dzval.  BE CAREFUL because this might change and if it does you ahve to rebinarise
-types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 'ljetXbbTagged'}
+N_Real_Vars = 7 # x, y, z, energy, d0val, dzval.  BE CAREFUL because this might change and if it does you ahve to rebinarise
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # %%
 # Set up stuff to read in data from bin file
 
 batch_size = 64*32
-DATA_PATH=f'/data/atlas/baines/tmp_SingleXbbSelected_XbbTagged_WithRecoMasses_{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '/'
+DATA_PATH='/data/atlas/baines/tmp_highLevel' + '_MetCut'*MET_CUT_ON + '/'
 memmap_paths = {}
+channel = 'qqbb'
 for file_name in os.listdir(DATA_PATH):
+    # if not '510124' in file_name:
+    #     continue
     if 'shape' in file_name:
         continue
-    dsid = file_name[5:11]
-    memmap_paths[int(dsid)] = DATA_PATH+file_name
-train_dataloader = ProportionalMemoryMappedDataset(
+    if channel in file_name:
+        dsid = file_name[5:11]
+        # if dsid < 510120:
+        memmap_paths[int(dsid)] = DATA_PATH+file_name
+    else:
+        pass
+train_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  memmap_paths = memmap_paths,  # DSID to memmap path
-                 max_n_objs=max_n_objs,
-                 N_Real_Vars=N_Real_Vars,
+                 N_Real_Vars=N_Real_Vars, # Will auto add 4 (for the y, w, dsid, mWh) inside the funciton
                  class_proportions = None,
                  batch_size=batch_size,
                  device=device, 
                  is_train=True,
                  n_targets=N_TARGETS,
-                 shuffle=SHUFFLE_OBJECTS,
                  train_split=0.5,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
-val_dataloader = ProportionalMemoryMappedDataset(
+val_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  memmap_paths = memmap_paths,  # DSID to memmap path
-                 max_n_objs=max_n_objs,
                  N_Real_Vars=N_Real_Vars,
                  class_proportions = None,
                  batch_size=batch_size,
                  device=device, 
                  is_train=False,
                  n_targets=N_TARGETS,
-                 shuffle=SHUFFLE_OBJECTS,
                  train_split=0.95,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
@@ -103,28 +101,8 @@ val_dataloader = ProportionalMemoryMappedDataset(
 # batch = next(train_dataloader)
 
 # %%
-
-class MyHookedTransformer(HookedTransformer):
-    def __init__(self, cfg, mass_input_layer=2, mass_hidden_dim=256, **kwargs):
-        super(MyHookedTransformer, self).__init__(cfg, **kwargs)
-        self.hook_dict['hook_mytokens'] = HookPoint()
-        self.hook_dict['hook_mytokens'].name = 'hook_mytokens'
-        self.mod_dict['hook_mytokens'] = self.hook_dict['hook_mytokens']
-        self.W_Embed = nn.Parameter(torch.empty((cfg.n_ctx, cfg.d_vocab, cfg.d_model)))
-        nn.init.normal_(self.W_Embed, std=0.02)
-        
-    def forward(self, tokens: Float[Tensor, "batch object d_input"], token_types: Float[Tensor, "batch object"], **kwargs) -> Float[Tensor, "batch d_model"]:
-        self.hook_dict['hook_mytokens'](tokens)
-        expanded_W_E = self.W_Embed.unsqueeze(0).expand(token_types.shape[0], -1, -1, -1)
-        expanded_types = token_types.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.W_Embed.shape[-2], self.W_Embed.shape[-1])
-        W_E_selected = torch.gather(expanded_W_E, dim=1, index=expanded_types)
-        output = einops.einsum(tokens, W_E_selected, "batch object d_input, batch object d_input d_model -> batch object d_model")
-        if 'start_at_layer' in kwargs:
-            raise NotImplementedError
-        else:
-            class_outs = super(MyHookedTransformer, self).forward(output, start_at_layer=0, **kwargs)
-            class_outs = class_outs[:,0]
-        return class_outs
+batch = next(train_dataloader)
+# plt.hist(batch['mWh'].detach().cpu())
 
 # %%
 # Create a new model
@@ -132,90 +110,78 @@ models = {}
 fit_histories = {}
 model_n = 0
 
-# Create the model with the desired properties
-model_cfg = HookedTransformerConfig(
-    d_model=64,
-    d_head=8,
-    n_layers=4,
-    n_heads=4,
-    n_ctx=N_CTX, # Max number of types of object per event + 1 because we want a dummy row in the embedding matrix for non-existing particles
-    d_vocab=N_Real_Vars, # Number of inputs per object
-    d_vocab_out=N_TARGETS,  # 2 because we're doing binary classification
-    d_mlp=256,
-    attention_dir="bidirectional",  # defaults to "causal"
-    act_fn="relu",
-    use_attn_result=True,
-    device=str(device),
-    use_hook_tokens=True,
-)
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+
+class ConfigurableNN(nn.Module):
+    def __init__(self, N_inputs, N_targets, hidden_layers, dropout_prob=0.0, use_batchnorm=True):
+        """
+        Initializes a configurable neural network.
+        Args:
+            N_inputs (int): Number of input features.
+            N_targets (int): Number of output neurons (for classification).
+            hidden_layers (list of int): List of integers specifying the number of neurons in each hidden layer.
+            dropout_prob (float): Probability of dropout. 0.0 means no dropout.
+            use_batchnorm (bool): Whether to use batch normalization in each layer.
+        """
+        super(ConfigurableNN, self).__init__()
+        layers = []
+        self.N_inputs = N_inputs
+        self.N_targets = N_targets
+        input_dim = self.N_inputs
+        for hidden_dim in hidden_layers:
+            # Input to first hidden layer and subsequent hidden layers
+            layers.append(nn.Linear(input_dim, hidden_dim))
+            if use_batchnorm:
+                layers.append(nn.BatchNorm1d(hidden_dim))
+            layers.append(nn.ReLU())  # Activation function
+            if dropout_prob > 0.0:
+                layers.append(nn.Dropout(p=dropout_prob))
+            input_dim = hidden_dim
+        # Output layer
+        layers.append(nn.Linear(input_dim, N_targets))
+        self.network = nn.Sequential(*layers)
+
+    def forward(self, x):
+        return self.network(x)
+
+    def summary(self):
+        """
+        Prints the summary of the network architecture.
+        """
+        num_params = sum(p.numel() for p in self.parameters())
+        print(f"Network Summary:\n{'-'*20}")
+        print(f"Total Parameters: {num_params}")
+        print(f"Input size: {self.N_inputs}")
+        print(f"Output size: {self.N_targets}")
+        print(f"Layers:")
+        for i, layer in enumerate(self.network):
+            print(f"Layer {i+1}: {layer}")
+        print(f"{'-'*20}")
+
 
 # models[model_n] = {'model' : Net(model_cfg).to(device), 'inputs' : inputs}
-models[model_n] = {'model' : MyHookedTransformer(model_cfg).to(device)}
+# models[model_n] = {'model' : MyHookedTransformer(model_cfg).to(device)}
+
+models[model_n] = {'model':ConfigurableNN(N_inputs=N_Real_Vars, N_targets=3, hidden_layers=[128, 64, 32, 16], dropout_prob=0.0).to(device)}
+models[model_n]['model'].summary()
 
 # %%
-def add_perma_hooks_to_mask_pad_tokens(
-    model: HookedTransformer
-) -> HookedTransformer:
-    # Hook which operates on the tokens, and stores a mask where tokens equal [pad]
-    def cache_padding_tokens_mask(tokens: Float[Tensor, "batch object d_input"], hook: HookPoint) -> None:
-        # print("Caching padding tokens!")
-        hook.ctx["padding_tokens_mask"] = einops.rearrange(torch.all(tokens==0, dim=-1), "b sK -> b 1 1 sK")
-
-    # Apply masking, by referencing the mask stored in the `hook_tokens` hook context
-    def apply_padding_tokens_mask(
-        attn_scores: Float[Tensor, "batch head seq_Q seq_K"],
-        hook: HookPoint,
-    ) -> None:
-        attn_scores.masked_fill_(model.hook_dict["hook_mytokens"].ctx["padding_tokens_mask"], -1e5)
-        if hook.layer() == model.cfg.n_layers - 1:
-            del model.hook_dict["hook_mytokens"].ctx["padding_tokens_mask"]
-
-    # Add these hooks as permanent hooks (i.e. they aren't removed after functions like run_with_hooks)
-    for name, hook in model.hook_dict.items():
-        if name == "hook_mytokens":
-            hook.add_perma_hook(cache_padding_tokens_mask)  # type: ignore
-        elif name.endswith("attn_scores"):
-            hook.add_perma_hook(apply_padding_tokens_mask)  # type: ignore
-
-    return model
-
-
-models[model_n]['model'].reset_hooks(including_permanent=True)
-models[model_n]['model'] = add_perma_hooks_to_mask_pad_tokens(models[model_n]['model'])
 class_weights = [1 for _ in range(N_TARGETS)]
 labels = ['Bkg', 'Lep', 'Had'] # truth==0 is bkg, truth==1 is leptonic decay, truth==2 is hadronic decay
 class_weights_expanded = einops.repeat(torch.Tensor(class_weights), 't -> batch t', batch=batch_size).to(device)
-
-# %%
 optimizer = torch.optim.Adam(models[model_n]['model'].parameters(), lr=1e-4, weight_decay=1e-5)
 num_epochs = 200
-# criterion = nn.CrossEntropyLoss(reduction='none')  # 'none' to handle sample weights
-# for epoch in range(num_epochs):
-#     dataloader._reset_indices()
-    
-#     # Training
-#     models[model_n]['model'].train()
-#     num_steps = len_train_dataloader-1
-#     for n_step in range(num_steps): #TODO currently we don't handle the last batch, fix this
-#         batch = next(dataloader)
-#         x, y, w, types, y_eval, mWH_qqbb, mWH_lvbb = batch['x'], batch['y'], batch['w'], batch['types'], batch['y_eval'], batch['mWH_qqbb'], batch['mWH_lvbb']
-#         class_weights_expanded = einops.repeat(torch.Tensor(class_weights), 't -> l t', l=y.shape[0]).to(device)
-#         outputs = models[model_n]['model'](x, types)
-#         class_loss = (criterion(outputs, y) * w).mean()
-#         optimizer.zero_grad()
-#         class_loss.backward()
-#         optimizer.step()
-#         if (n_step % 10) == 0:
-#             print('[%d/%d][%d/%d]\tLoss_C: %.4e' %(epoch, num_epochs, n_step, num_steps,class_loss.item()))
-
-# %%
 
 class SignalSelectionMetrics:
-    def __init__(self, signal_acceptance_levels=[0.5, 0.7, 0.9]):
+    def __init__(self, total_weights_per_dsid={}, signal_acceptance_levels=[0.5, 0.7, 0.9]):
         """
         Args:
             signal_acceptance_levels: List of percentages (0-1) of signal events to accept
         """
+        assert(len(total_weights_per_dsid))
+        self.total_weights_per_dsid = total_weights_per_dsid
         self.signal_levels = sorted(signal_acceptance_levels)
         self.reset()
         
@@ -224,14 +190,17 @@ class SignalSelectionMetrics:
         self.all_probs = []
         self.all_targets = []
         self.all_weights = []
+        self.all_dsid = []  # to track dsid for each sample
+        self.dsid_weight_sums = {}  # to track weight sums per dsid
         
-    def update(self, preds, targets, weights):
+    def update(self, preds, targets, weights, dsid):
         """
         Args:
             preds: Tensor of shape [batch_size, 3] with predicted probabilities
                   (columns: background, lvbb, qqbb)
             targets: Tensor of shape [batch_size] with true class indices
             weights: Tensor of shape [batch_size] with sample weights
+            dsid: Tensor of shape [batch_size] with dsid for each sample
         """
         # Convert to probabilities if needed
         if preds.shape[1] > 3:  # If logits are passed
@@ -242,6 +211,14 @@ class SignalSelectionMetrics:
         self.all_probs.append(probs.cpu())
         self.all_targets.append(targets.cpu())
         self.all_weights.append(weights.cpu())
+        self.all_dsid.append(dsid.cpu())
+
+        # Update weight sums per dsid
+        unique_dsid = dsid.unique()
+        for d in unique_dsid:
+            if d not in self.dsid_weight_sums:
+                self.dsid_weight_sums[d] = 0.0
+            self.dsid_weight_sums[d] += weights[dsid == d].sum().item()
         
     def compute(self):
         if not self.all_probs:
@@ -251,6 +228,7 @@ class SignalSelectionMetrics:
         probs = torch.cat(self.all_probs)
         targets = torch.cat(self.all_targets)
         weights = torch.cat(self.all_weights)
+        dsids = torch.cat(self.all_dsid)
         
         # Separate signal and background
         bkg_mask = targets == 0
@@ -290,22 +268,40 @@ class SignalSelectionMetrics:
             # Calculate background proportions
             bkg_lvbb = (bkg_mask & lvbb_selected).float() * weights
             bkg_qqbb = (bkg_mask & qqbb_selected).float() * weights
-            
-            total_bkg_weight = weights[bkg_mask].sum()
-            
-            if total_bkg_weight > 0:
-                bkg_lvbb_frac = bkg_lvbb.sum() / total_bkg_weight
-                bkg_qqbb_frac = bkg_qqbb.sum() / total_bkg_weight
-            else:
-                bkg_lvbb_frac = 0.0
-                bkg_qqbb_frac = 0.0
+
+            if 0: # Old
+                total_bkg_weight = weights[bkg_mask].sum()
+                if total_bkg_weight > 0:
+                    bkg_lvbb_frac = bkg_lvbb.sum() / total_bkg_weight
+                    bkg_qqbb_frac = bkg_qqbb.sum() / total_bkg_weight
+                else:
+                    bkg_lvbb_frac = 0.0
+                    bkg_qqbb_frac = 0.0
+            else: # New, do total not just probability
+                # Initialize a dictionary to store results for each dsid
+                bkg_lvbb_exp_per_dsid = {}
+                bkg_qqbb_exp_per_dsid = {}
+                
+                # Calculate for each dsid
+                for dsid in dsids.unique():
+                    # Filter by dsid
+                    bkg_lvbb_dsid = bkg_lvbb[dsids == dsid]
+                    bkg_qqbb_dsid = bkg_qqbb[dsids == dsid]
+                    total_processed_weight_dsid = self.dsid_weight_sums.get(dsid, 0.0)
+                    
+                    if total_processed_weight_dsid !=0:
+                        bkg_lvbb_exp_per_dsid[dsid] = bkg_lvbb_dsid.sum().item() / total_processed_weight_dsid * self.total_weights_per_dsid[dsid]
+                        bkg_qqbb_exp_per_dsid[dsid] = bkg_qqbb_dsid.sum().item() / total_processed_weight_dsid  * self.total_weights_per_dsid[dsid]
+                    else:
+                        bkg_lvbb_exp_per_dsid[dsid] = 0.0
+                        bkg_qqbb_exp_per_dsid[dsid] = 0.0
                 
             # Store results
             results[f'signal_acceptance_{int(level*100)}'] = {
                 'lvbb_threshold': lvbb_thresh,
                 'qqbb_threshold': qqbb_thresh,
-                'bkg_lvbb_fraction': bkg_lvbb_frac.item(),
-                'bkg_qqbb_fraction': bkg_qqbb_frac.item()
+                'bkg_lvbb_expected': sum(bkg_lvbb_exp_per_dsid.values()),
+                'bkg_qqbb_expected': sum(bkg_qqbb_exp_per_dsid.values())
             }
             
         return results
@@ -576,15 +572,14 @@ class HEPMetrics:
         # Mass reconstruction histograms
         self.mass_bins = mass_bins
         self.mass_range = mass_range
-        self.qqbb_mass = []
-        self.lvbb_mass = []
+        self.mWh = []
         
         # Significance tracking
         self.true_signal = []
         self.pred_scores = []
         self.targets = []
     
-    def update(self, preds, targets, weights, masses_qq, masses_lv):
+    def update(self, preds, targets, weights, mWh):
         probs = F.softmax(preds, dim=1)
         self.accuracy.update(preds, targets, weights)
         # print("Accuracy calculated here: ", self.accuracy.compute())
@@ -599,8 +594,7 @@ class HEPMetrics:
         qq_correct = (targets == 2) & (pred_labels == 2)
         lv_correct = (targets == 1) & (pred_labels == 1)
         
-        self.qqbb_mass.extend(masses_qq[qq_correct].cpu().tolist())
-        self.lvbb_mass.extend(masses_lv[lv_correct].cpu().tolist())
+        self.mWh.extend(mWh[qq_correct].cpu().tolist())
         
         # For significance calculation
         self.true_signal.extend((targets > 0).cpu().tolist())
@@ -612,8 +606,7 @@ class HEPMetrics:
         self.accuracy.reset()
         self.auc.reset()
         self.confusion.reset()
-        self.qqbb_mass = []
-        self.lvbb_mass = []
+        self.mWh = []
         self.true_signal = []
         self.pred_scores = []
         self.targets = []
@@ -653,14 +646,9 @@ class HEPMetrics:
             # plt.close(fig)
         
             # Mass histograms
-            if len(self.qqbb_mass) > 0:
-                metrics[f"{prefix}/qqbb_mass"] = wandb.Histogram(
-                    np.array(self.qqbb_mass), 
-                    num_bins=self.mass_bins
-                )
-            if len(self.lvbb_mass) > 0:
-                metrics[f"{prefix}/lvbb_mass"] = wandb.Histogram(
-                    np.array(self.lvbb_mass),
+            if len(self.mWh) > 0:
+                metrics[f"{prefix}/mWh"] = wandb.Histogram(
+                    np.array(self.mWh), 
                     num_bins=self.mass_bins
                 )
         
@@ -698,7 +686,7 @@ class HEPLoss(nn.Module):
         self.alpha = alpha
         self.target_mass = target_mass
         
-    def forward(self, inputs, targets, weights, log, masses_qq, masses_lv):
+    def forward(self, inputs, targets, weights, log, mWh):
         ce_loss = self.ce(inputs, targets) * weights
         
         # Mass regularization
@@ -729,6 +717,7 @@ config = {
         "epochs": num_epochs,
         "batch_size": batch_size,
         "wandb":True
+        # "wandb":False
     }
 if config['wandb']:
     init_wandb(config)
@@ -751,12 +740,15 @@ for epoch in range(num_epochs):
         if (batch_idx >= orig_len_train_dataloader-5):
             continue
         batch = next(train_loader)
-        x, y, w, types, _, mqq, mlv, _ = batch.values()
-        x, y, w, types, mqq, mlv = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device)
+        x, y, mWh, dsid, w, MC_w = batch.values()
+        # batch['train_wts']
+        # assert(False)
+        x, y, w, mWh = x.to(device), y.to(device), w.to(device), mWh.to(device)
         
         optimizer.zero_grad()
-        outputs = model(x, types)
-        loss = criterion(outputs, y, w, config["wandb"], mqq, mlv)
+        outputs = model(x)
+        # assert(False)
+        loss = criterion(outputs, y, w, config['wandb'], mWh)
         train_loss_epoch += loss.item()
         sum_weights_epoch += w.sum().item()
         
@@ -764,7 +756,7 @@ for epoch in range(num_epochs):
         optimizer.step()
         
         # Update training metrics
-        train_metrics.update(outputs, y.argmax(dim=-1), w, mqq, mlv)
+        train_metrics.update(outputs, y.argmax(dim=-1), w, mWh)
         if (n_step % 10) == 0:
             print('[%d/%d][%d/%d]\tLoss_C: %.4e' %(epoch, num_epochs, n_step, orig_len_train_dataloader, loss.item()))
             # Log training metrics every log_interval batches
@@ -826,13 +818,13 @@ for epoch in range(num_epochs):
             if (batch_idx >= orig_len_val_dataloader-5):
                 continue
 
-            x, y, w, types, _, mqq, mlv, _ = batch.values()
-            x, y, w, types, mqq, mlv = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device)
-            
-            outputs = model(x, types)
-            loss += criterion(outputs, y, w, config["wandb"], mqq, mlv).sum()
+            x, y, mWh, dsid, w, MC_w = batch.values()
+            x, y, w, mWh = x.to(device), y.to(device), w.to(device), mWh.to(device)
+        
+            outputs = model(x)
+            loss += criterion(outputs, y, w, config['wandb'], mWh).sum()
             wt_sum += w.sum()
-            val_metrics.update(outputs, y.argmax(dim=-1), w, mqq, mlv)
+            val_metrics.update(outputs, y.argmax(dim=-1), w, mWh)
             # print('[%d/%d][%d/%d] Val' %(epoch, num_epochs, batch_idx, orig_len_val_dataloader))
         if config['wandb']:
             wandb.log({
@@ -897,3 +889,4 @@ for epoch in range(num_epochs):
 modelSaveDir = "%s/models/%d/"%(saveDir, model_n)
 os.makedirs(modelSaveDir, exist_ok=True)
 torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d" %(global_step) + '.pth')
+# %%
