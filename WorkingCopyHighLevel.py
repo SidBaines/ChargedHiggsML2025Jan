@@ -61,15 +61,17 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Set up stuff to read in data from bin file
 
 batch_size = 64*32
-DATA_PATH='/data/atlas/baines/tmp_highLevel' + '_MetCut'*MET_CUT_ON + '/'
+DATA_PATH='/data/atlas/baines/tmp2_highLevel' + '_MetCut'*MET_CUT_ON + '/'
 memmap_paths = {}
-channel = 'lvbb'
+channel = 'qqbb'
+means = np.load(f'{DATA_PATH}{channel}_mean.npy')
+stds = np.load(f'{DATA_PATH}{channel}_std.npy')
 for file_name in os.listdir(DATA_PATH):
     # if not '510124' in file_name:
     #     continue
     if 'shape' in file_name:
         continue
-    if channel in file_name:
+    if (channel in file_name) and ('dsid' in file_name):
         dsid = file_name[5:11]
         # if dsid < 510120:
         memmap_paths[int(dsid)] = DATA_PATH+file_name
@@ -84,6 +86,8 @@ train_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  is_train=True,
                  n_targets=N_TARGETS,
                  train_split=0.5,
+                 means=means,
+                 stds=stds,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
@@ -96,6 +100,8 @@ val_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  is_train=False,
                  n_targets=N_TARGETS,
                  train_split=0.95,
+                 means=means,
+                 stds=stds,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
@@ -165,7 +171,7 @@ class ConfigurableNN(nn.Module):
 # models[model_n] = {'model' : Net(model_cfg).to(device), 'inputs' : inputs}
 # models[model_n] = {'model' : MyHookedTransformer(model_cfg).to(device)}
 
-models[model_n] = {'model':ConfigurableNN(N_inputs=N_Real_Vars, N_targets=N_TARGETS, hidden_layers=[128, 64, 32, 16], dropout_prob=0.0).to(device)}
+models[model_n] = {'model':ConfigurableNN(N_inputs=N_Real_Vars, N_targets=N_TARGETS, hidden_layers=[128, 128, 128], dropout_prob=0.05, use_batchnorm=False).to(device)}
 models[model_n]['model'].summary()
 
 # %%
@@ -193,7 +199,7 @@ log_interval = 20
 config = {
         "learning_rate": 1e-4,
         "learning_rate_low": 1e-5,
-        "cosine_lr_n_epochs": 10,   # Number of epochs to complete one cycle of learning rate
+        "cosine_lr_n_epochs": int(num_epochs/2),   # Number of epochs to complete one cycle of learning rate
         "architecture": "HighLevelNN",
         "dataset": "ATLAS_ChargedHiggs",
         "epochs": num_epochs,

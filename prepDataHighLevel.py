@@ -25,7 +25,7 @@ import matplotlib.pyplot as plt
 MET_CUT_ON = True
 REQUIRE_XBB = True
 BIN_WRITE_TYPE=np.float32
-OUTPUT_DIR = '/data/atlas/baines/tmp_highLevel' + '_MetCut'*MET_CUT_ON + '/'
+OUTPUT_DIR = '/data/atlas/baines/tmp2_highLevel' + '_MetCut'*MET_CUT_ON + '/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Create a mapping from the dsid/decay-type pair to integers, for the purposes of binarising data.
@@ -39,7 +39,44 @@ dsid_set = np.array([363355,363356,363357,363358,363359,363360,363489,407342,407
             ]) # Try not to change this often - have to re-binarise if we do!
 
 
+# Running statistics (mean, variance, count) for each input feature
+class RunningStats:
+    def __init__(self, n_features):
+        self.n = 0  # Count of data points seen
+        self.mean = np.zeros(n_features)  # Mean for each feature
+        self.m2 = np.zeros(n_features)  # Sum of squared differences for variance
+    
+    def update(self, x):
+        # x is the batch of data, where each row is a data point, and columns are features
+        n_batch = x.shape[0]
+        
+        # Update count
+        self.n += n_batch
+        if n_batch > 0:    
+            # Update mean
+            delta = x - self.mean
+            self.mean += delta.sum(axis=0) / self.n
+            
+            # Update m2 (sum of squared differences)
+            delta2 = x - self.mean
+            self.m2 += (delta * delta2).sum(axis=0)
+    
+    def compute_std(self):
+        # Calculate standard deviation using the variance (m2 / n - 1)
+        return np.sqrt(self.m2 / (self.n - 1))
 
+    def get_mean(self):
+        return self.mean
+    
+    def get_variance(self):
+        return self.m2 / (self.n - 1)  # Variance for each feature
+
+# Initialize running stats for 7 features (based on your input features)
+n_features = 7  # Adjust to match the number of input features you're tracking
+running_stats = {
+    'lvbb':RunningStats(n_features),
+    'qqbb':RunningStats(n_features),
+}
 
 # %%
 # Main function to actually process a single file and return the arrays
@@ -121,7 +158,7 @@ MAX_CHUNK_SIZE = 100000
 for dsid in dsid_set:
     for channel in ['lvbb', 'qqbb']:
         # if dsid != 510124:
-        # # # if dsid <= 700348:
+        # if dsid >= 400000:
         #     continue
         if True:
             pass
@@ -159,7 +196,13 @@ for dsid in dsid_set:
             # if path == '/data/atlas/HplusWh/20241128_ProcessedLightNtuples/user.rhulsken.mc16_13TeV.363355.She221_ZqqZvv.TOPQ1.e5525s3126r10201p4512.Nominal_v0_1l_out_root/user.rhulsken.31944615._000001.out.root':
             #     continue
             x_chunk, y_chunk, weights_chunk, dsid_chunk, mWhs_chunk, removals_chunk = process_single_file(filepath=path, target_channel=channel)
-            # assert(False)
+            means=np.load(f'/data/atlas/baines/tmp2_highLevel_MetCut/{channel}_mean.npy')
+            stds=np.load(f'/data/atlas/baines/tmp2_highLevel_MetCut/{channel}_std.npy')
+            # if x_chunk.shape[0]>500:
+            #     print(x_chunk.shape)
+            #     print(((x_chunk - means)/stds).mean(axis=0))
+            #     print(((x_chunk - means)/stds).std(axis=0))
+            running_stats[channel].update(x_chunk)
             
             x_parts.append(x_chunk)
             ys.append(y_chunk)
@@ -205,6 +248,13 @@ for dsid in dsid_set:
         print("Total bkg removed for no ljet/MET Cut/Selection category fail: %d" %(removals[0]))
         print("Total lvbb removed for no ljet/MET Cut/Selection category fail: %d" %(removals[1]))
         print("Total qqbb removed for no ljet/MET Cut/Selection category fail: %d" %(removals[2]))
+
+for channel in ['lvbb', 'qqbb']:
+    print("Feature means: ", running_stats[channel].get_mean())
+    print("Feature std devs: ", running_stats[channel].compute_std())
+    # Optionally, you can save these stats for later use in a scaler
+    np.save(os.path.join(OUTPUT_DIR, f'{channel}_mean.npy'), running_stats[channel].get_mean())
+    np.save(os.path.join(OUTPUT_DIR, f'{channel}_std.npy'), running_stats[channel].compute_std())
 
 
 

@@ -21,6 +21,8 @@ class ProportionalMemoryMappedDatasetHighLevel:
                  n_targets: int = 3,
                  shuffle_batch: bool = True, # Whether or not to shuffle along the batch dimension, should be true unless we're testing
                  signal_reweights: typing.Optional[np.array]=None,
+                 means=None,
+                 stds=None,
                  ):
         """
         Initialize a dataset loader with memory-mapped files for each class (DSID)
@@ -43,6 +45,15 @@ class ProportionalMemoryMappedDatasetHighLevel:
         # Add train/val splitting logic
         self.is_train = is_train
         self.train_split = train_split
+        # Add/populate with defaults the mean/std for scaling inputs
+        if means is not None:
+            self.means = torch.Tensor(means).to(torch.float32)
+        else:
+            self.means = torch.zeros(N_Real_Vars).to(torch.float32)
+        if stds is not None:
+            self.stds = torch.Tensor(stds).to(torch.float32)
+        else:
+            self.stds = torch.ones(N_Real_Vars).to(torch.float32)
 
         self.bkg_weight_sums = 0
         # self.sig_weight_sums = 0
@@ -225,6 +236,7 @@ class ProportionalMemoryMappedDatasetHighLevel:
         mWh = torch.from_numpy(batch_samples[:,2])
         dsid = torch.from_numpy(batch_samples[:,3])
         x = torch.from_numpy(batch_samples[:,4:])
+        x = (x - self.means)/self.stds
         MC_Wts = torch.from_numpy(MC_Wts).reshape(training_Wts.shape)
         # print(training_Wts)
         training_Wts = np.abs(training_Wts)
