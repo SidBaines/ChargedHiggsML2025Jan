@@ -188,22 +188,8 @@ class ProportionalMemoryMappedDatasetHighLevel:
             # Add corresponding labels
             if (dsid>500000) and (dsid<600000):
                 if self.signal_reweights is None:
-                    # print('----')
-                    # print(self.bkg_weight_sums)
-                    # print(self.num_signals)
-                    # print(self.bkg_weight_sums)
-                    # print(self.abs_weight_sums[dsid])
-                    # print('----')
                     batch_weight_mult_factors.append(np.full(num_samples, 1/self.num_signals*self.bkg_weight_sums/self.abs_weight_sums[dsid]))
                 else:
-                    # print('----')
-                    # print(self.bkg_weight_sums)
-                    # print(sum(self.signal_reweights))
-                    # print(sum(self.signal_reweights)*self.bkg_weight_sums)
-                    # print(self.signal_reweights[dsid-510115])
-                    # print(sum(self.signal_reweights)*self.bkg_weight_sums/self.abs_weight_sums[dsid])
-                    # print(self.signal_reweights[dsid-510115]/sum(self.signal_reweights)*self.bkg_weight_sums/self.abs_weight_sums[dsid])
-                    # print('----')
                     batch_weight_mult_factors.append(np.full(num_samples, self.signal_reweights[dsid-510115]/sum(self.signal_reweights)*self.bkg_weight_sums/self.abs_weight_sums[dsid]))
             else:
                 batch_weight_mult_factors.append(np.full(num_samples, self.weight_sums[dsid]/self.abs_weight_sums[dsid]))
@@ -220,7 +206,8 @@ class ProportionalMemoryMappedDatasetHighLevel:
         
         # Shuffle batch
         if self.shuffle_batch:
-            shuffled_indices = np.random.shuffle(np.arange(len(batch_samples)))
+            shuffled_indices = np.arange(len(batch_samples))
+            np.random.shuffle(shuffled_indices)
         else:
             shuffled_indices = np.arange(len(batch_samples))
         batch_samples = batch_samples[shuffled_indices].squeeze()

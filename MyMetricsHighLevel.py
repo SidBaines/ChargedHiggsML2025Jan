@@ -6,11 +6,12 @@ import numpy as np
 from sklearn.metrics import roc_curve
 
 class ByMassSignalSelectionMetrics:
-    def __init__(self, total_weights_per_dsid={}, signal_acceptance_levels=[100, 500, 5000]):
+    def __init__(self, channel, total_weights_per_dsid={}, signal_acceptance_levels=[100, 500, 5000]):
         """
         Args:
             signal_acceptance_levels: List of percentages (0-1) of signal events to accept
         """
+        self.channel = channel
         assert(len(total_weights_per_dsid))
         self.total_weights_per_dsid = total_weights_per_dsid
         self.signal_levels = sorted(signal_acceptance_levels)
@@ -63,13 +64,11 @@ class ByMassSignalSelectionMetrics:
         
         # Separate signal and background
         bkg_mask = targets == 0
-        lvbb_mask = targets == 1
-        qqbb_mask = targets == 2
+        sig_mask = targets == 1
         
         # Get probabilities
         p_bkg = probs[:, 0]
-        p_lvbb = probs[:, 1]
-        p_qqbb = probs[:, 2]
+        p_sig = probs[:, 1]
         
         # Initialize results dictionary
         results = {}
@@ -84,28 +83,17 @@ class ByMassSignalSelectionMetrics:
                     continue
                 signal_mass_mask = dsids == signal_dsid
                 # Calculate thresholds for this acceptance level
-                lvbb_thresh = self._find_threshold(
-                    p_bkg[lvbb_mask & signal_mass_mask], p_lvbb[lvbb_mask & signal_mass_mask], p_qqbb[lvbb_mask & signal_mass_mask],
-                    weights[lvbb_mask & signal_mass_mask], frac_level
+                thresh = self._find_threshold(
+                    p_bkg[sig_mask & signal_mass_mask], p_sig[sig_mask & signal_mass_mask],
+                    weights[sig_mask & signal_mass_mask], frac_level
                 )
-                qqbb_thresh = self._find_threshold(
-                    p_bkg[qqbb_mask & signal_mass_mask], p_qqbb[qqbb_mask & signal_mass_mask], p_lvbb[qqbb_mask & signal_mass_mask],
-                    weights[qqbb_mask & signal_mass_mask], frac_level
-                )
-                
                 # Apply selection logic
-                lvbb_selected = (
-                    (p_lvbb >= p_qqbb) & 
-                    (p_bkg < lvbb_thresh)
-                )
-                qqbb_selected = (
-                    (p_qqbb >= p_lvbb) & 
-                    (p_bkg < qqbb_thresh)
+                selected = (
+                    (p_bkg < thresh)
                 )
                 
                 # Calculate background proportions
-                bkg_lvbb = (bkg_mask & lvbb_selected).float() * weights
-                bkg_qqbb = (bkg_mask & qqbb_selected).float() * weights
+                bkg_selected = (bkg_mask & selected).float() * weights
 
                 if 0: # Old
                     total_bkg_weight = weights[bkg_mask].sum()
@@ -117,34 +105,28 @@ class ByMassSignalSelectionMetrics:
                         bkg_qqbb_frac = 0.0
                 else: # New, do total not just probability
                     # Initialize a dictionary to store results for each dsid
-                    bkg_lvbb_exp_per_dsid = {}
-                    bkg_qqbb_exp_per_dsid = {}
+                    bkg_selected_exp_per_dsid = {}
                     
                     # Calculate for each dsid
                     for dsid in dsids.unique():
                         # Filter by dsid
-                        bkg_lvbb_dsid = bkg_lvbb[dsids == dsid]
-                        bkg_qqbb_dsid = bkg_qqbb[dsids == dsid]
+                        bkg_selected_dsid = bkg_selected[dsids == dsid]
                         total_processed_weight_dsid = self.dsid_weight_sums.get(dsid.item(), 0.0)
                         
                         if total_processed_weight_dsid !=0:
-                            bkg_lvbb_exp_per_dsid[dsid] = bkg_lvbb_dsid.sum().item() / total_processed_weight_dsid * self.total_weights_per_dsid[dsid.item()]
-                            bkg_qqbb_exp_per_dsid[dsid] = bkg_qqbb_dsid.sum().item() / total_processed_weight_dsid  * self.total_weights_per_dsid[dsid.item()]
+                            bkg_selected_exp_per_dsid[dsid] = bkg_selected_dsid.sum().item() / total_processed_weight_dsid * self.total_weights_per_dsid[dsid.item()]
                         else:
-                            bkg_lvbb_exp_per_dsid[dsid] = 0.0
-                            bkg_qqbb_exp_per_dsid[dsid] = 0.0
+                            bkg_selected_exp_per_dsid[dsid] = 0.0
                     
                 # Store results
                 results[(level, signal_dsid)] = {
-                    'lvbb_threshold': lvbb_thresh,
-                    'qqbb_threshold': qqbb_thresh,
-                    'bkg_lvbb_expected': sum(bkg_lvbb_exp_per_dsid.values()),# if lvbb_thresh != 1 else np.nan, # Guard against the case where the threshold is set to accept all
-                    'bkg_qqbb_expected': sum(bkg_qqbb_exp_per_dsid.values())# if qqbb_thresh != 1 else np.nan
+                    f'{self.channel}_threshold': thresh,
+                    f'bkg_{self.channel}_expected': sum(bkg_selected_exp_per_dsid.values()),# if lvbb_thresh != 1 else np.nan, # Guard against the case where the threshold is set to accept all
                 }
             
         return results
 
-    def _find_threshold(self, p_bkg, p_sig, p_other_sig, weights, acceptance_level):#, signal_type):
+    def _find_threshold(self, p_bkg, p_sig, weights, acceptance_level):#, signal_type):
         """
         Find the background probability threshold that accepts the specified
         fraction of signal events, while respecting the mutual exclusivity rule.
@@ -160,22 +142,6 @@ class ByMassSignalSelectionMetrics:
         if len(p_sig) == 0:
             return 1.0  # No signal events
         
-        # Apply mutual exclusivity rule
-        valid_mask = p_sig >= p_other_sig
-        # if signal_type == 'lvbb':
-        #     valid_mask = p_sig >= p_other_sig
-        # else:  # qqbb
-        #     valid_mask = p_sig >= p_other_sig
-            
-        # Filter events that satisfy the mutual exclusivity rule
-        sum_wts_failing_mutual_exclusivity = weights[~valid_mask].sum()
-        p_bkg = p_bkg[valid_mask]
-        p_sig = p_sig[valid_mask]
-        weights = weights[valid_mask]
-        
-        if len(p_sig) == 0:
-            return 1.0  # No signal events after applying exclusivity
-        
         # Sort remaining signal events by p_bkg
         sorted_idx = torch.argsort(p_bkg)
         sorted_p_bkg = p_bkg[sorted_idx]
@@ -186,7 +152,7 @@ class ByMassSignalSelectionMetrics:
         total_weight = cum_weights[-1]
         
         # Find threshold that accepts desired fraction
-        target_weight = (total_weight + sum_wts_failing_mutual_exclusivity) * acceptance_level
+        target_weight = total_weight * acceptance_level
         idx = torch.searchsorted(cum_weights, target_weight)
         
         if idx >= len(sorted_p_bkg):
@@ -195,11 +161,12 @@ class ByMassSignalSelectionMetrics:
         return sorted_p_bkg[idx].item()
 
 class SignalSelectionMetrics:
-    def __init__(self, total_weights_per_dsid={}, signal_acceptance_levels=[100, 500, 5000]):
+    def __init__(self, channel, total_weights_per_dsid={}, signal_acceptance_levels=[100, 500, 5000]):
         """
         Args:
             signal_acceptance_levels: List of percentages (0-1) of signal events to accept
         """
+        self.channel = channel
         assert(len(total_weights_per_dsid))
         self.total_weights_per_dsid = total_weights_per_dsid
         self.signal_levels = sorted(signal_acceptance_levels)
@@ -252,13 +219,11 @@ class SignalSelectionMetrics:
         
         # Separate signal and background
         bkg_mask = targets == 0
-        lvbb_mask = targets == 1
-        qqbb_mask = targets == 2
+        sig_mask = targets == 1
         
         # Get probabilities
         p_bkg = probs[:, 0]
-        p_lvbb = probs[:, 1]
-        p_qqbb = probs[:, 2]
+        p_sig = probs[:, 1]
         
         # Initialize results dictionary
         results = {}
@@ -269,28 +234,18 @@ class SignalSelectionMetrics:
             if frac_level > 1:
                 continue
             # Calculate thresholds for this acceptance level
-            lvbb_thresh = self._find_threshold(
-                p_bkg[lvbb_mask], p_lvbb[lvbb_mask], p_qqbb[lvbb_mask],
-                weights[lvbb_mask], frac_level
-            )
-            qqbb_thresh = self._find_threshold(
-                p_bkg[qqbb_mask], p_qqbb[qqbb_mask], p_lvbb[qqbb_mask],
-                weights[qqbb_mask], frac_level
+            thresh = self._find_threshold(
+                p_bkg[sig_mask], p_sig[sig_mask],
+                weights[sig_mask], frac_level
             )
             
             # Apply selection logic
-            lvbb_selected = (
-                (p_lvbb >= p_qqbb) & 
-                (p_bkg < lvbb_thresh)
-            )
-            qqbb_selected = (
-                (p_qqbb >= p_lvbb) & 
-                (p_bkg < qqbb_thresh)
+            selected = ( 
+                (p_bkg < thresh)
             )
             
             # Calculate background proportions
-            bkg_lvbb = (bkg_mask & lvbb_selected).float() * weights
-            bkg_qqbb = (bkg_mask & qqbb_selected).float() * weights
+            bkg_selected = (bkg_mask & selected).float() * weights
 
             if 0: # Old
                 total_bkg_weight = weights[bkg_mask].sum()
@@ -302,34 +257,28 @@ class SignalSelectionMetrics:
                     bkg_qqbb_frac = 0.0
             else: # New, do total not just probability
                 # Initialize a dictionary to store results for each dsid
-                bkg_lvbb_exp_per_dsid = {}
-                bkg_qqbb_exp_per_dsid = {}
+                bkg_selected_exp_per_dsid = {}
                 
                 # Calculate for each dsid
                 for dsid in dsids.unique():
                     # Filter by dsid
-                    bkg_lvbb_dsid = bkg_lvbb[dsids == dsid]
-                    bkg_qqbb_dsid = bkg_qqbb[dsids == dsid]
+                    bkg_selected_dsid = bkg_selected[dsids == dsid]
                     total_processed_weight_dsid = self.dsid_weight_sums.get(dsid.item(), 0.0)
                     
                     if total_processed_weight_dsid !=0:
-                        bkg_lvbb_exp_per_dsid[dsid] = bkg_lvbb_dsid.sum().item() / total_processed_weight_dsid * self.total_weights_per_dsid[dsid.item()]
-                        bkg_qqbb_exp_per_dsid[dsid] = bkg_qqbb_dsid.sum().item() / total_processed_weight_dsid  * self.total_weights_per_dsid[dsid.item()]
+                        bkg_selected_exp_per_dsid[dsid] = bkg_selected_dsid.sum().item() / total_processed_weight_dsid * self.total_weights_per_dsid[dsid.item()]
                     else:
-                        bkg_lvbb_exp_per_dsid[dsid] = 0.0
-                        bkg_qqbb_exp_per_dsid[dsid] = 0.0
+                        bkg_selected_exp_per_dsid[dsid] = 0.0
                 
             # Store results
             results[f'signal_acceptance_{int(level)}'] = {
-                'lvbb_threshold': lvbb_thresh,
-                'qqbb_threshold': qqbb_thresh,
-                'bkg_lvbb_expected': sum(bkg_lvbb_exp_per_dsid.values()),# if lvbb_thresh != 1 else np.nan, # Guard against the case where the threshold is set to accept all
-                'bkg_qqbb_expected': sum(bkg_qqbb_exp_per_dsid.values())# if qqbb_thresh != 1 else np.nan
+                f'{self.channel}_threshold': thresh,
+                f'bkg_{self.channel}_expected': sum(bkg_selected_exp_per_dsid.values()),# if lvbb_thresh != 1 else np.nan, # Guard against the case where the threshold is set to accept all
             }
             
         return results
 
-    def _find_threshold(self, p_bkg, p_sig, p_other_sig, weights, acceptance_level):#, signal_type):
+    def _find_threshold(self, p_bkg, p_sig, weights, acceptance_level):#, signal_type):
         """
         Find the background probability threshold that accepts the specified
         fraction of signal events, while respecting the mutual exclusivity rule.
@@ -345,22 +294,6 @@ class SignalSelectionMetrics:
         if len(p_sig) == 0:
             return 1.0  # No signal events
         
-        # Apply mutual exclusivity rule
-        valid_mask = p_sig >= p_other_sig
-        # if signal_type == 'lvbb':
-        #     valid_mask = p_sig >= p_other_sig
-        # else:  # qqbb
-        #     valid_mask = p_sig >= p_other_sig
-            
-        # Filter events that satisfy the mutual exclusivity rule
-        sum_wts_failing_mutual_exclusivity = weights[~valid_mask].sum()
-        p_bkg = p_bkg[valid_mask]
-        p_sig = p_sig[valid_mask]
-        weights = weights[valid_mask]
-        
-        if len(p_sig) == 0:
-            return 1.0  # No signal events after applying exclusivity
-        
         # Sort remaining signal events by p_bkg
         sorted_idx = torch.argsort(p_bkg)
         sorted_p_bkg = p_bkg[sorted_idx]
@@ -371,7 +304,7 @@ class SignalSelectionMetrics:
         total_weight = cum_weights[-1]
         
         # Find threshold that accepts desired fraction
-        target_weight = (total_weight + sum_wts_failing_mutual_exclusivity) * acceptance_level
+        target_weight = total_weight * acceptance_level
         idx = torch.searchsorted(cum_weights, target_weight)
         
         if idx >= len(sorted_p_bkg):
@@ -582,32 +515,34 @@ def init_wandb(config):
 
 class HEPMetrics:
     def __init__(self, 
-                 num_classes=3, 
+                 channel=None,
+                 num_classes=2, 
                  mass_bins=50, 
                  mass_range=(0, 1000), 
                  signal_acceptance_levels=[100, 500, 5000],
                  total_weights_per_dsid={},
                  ):
         # Classification metrics
+        assert(channel is not None)
+        self.channel = channel
         self.accuracy = WeightedMulticlassAccuracy(num_classes=num_classes)
         self.auc = WeightedMulticlassAUC(num_classes=num_classes)
         self.confusion = WeightedConfusionMatrix(num_classes=num_classes)
-        self.signal_selection = SignalSelectionMetrics(total_weights_per_dsid, signal_acceptance_levels)
-        self.by_mass_signal_selection = ByMassSignalSelectionMetrics(total_weights_per_dsid, signal_acceptance_levels)
+        self.signal_selection = SignalSelectionMetrics(self.channel, total_weights_per_dsid, signal_acceptance_levels)
+        self.by_mass_signal_selection = ByMassSignalSelectionMetrics(self.channel, total_weights_per_dsid, signal_acceptance_levels)
         
         
         # Mass reconstruction histograms
         self.mass_bins = mass_bins
         self.mass_range = mass_range
-        self.qqbb_mass = []
-        self.lvbb_mass = []
+        self.mWh = []
         
         # Significance tracking
         self.true_signal = []
-        self.probs = []
+        self.pred_scores = []
         # self.targets = []
     
-    def update(self, preds, targets, weights, masses_qq, masses_lv, dsid):
+    def update(self, preds, targets, weights, mWh, dsid):
         probs = F.softmax(preds, dim=1)
         self.accuracy.update(preds, targets, weights)
         # print("Accuracy calculated here: ", self.accuracy.compute())
@@ -620,15 +555,13 @@ class HEPMetrics:
         sig_mask = targets > 0
         pred_labels = preds.argmax(dim=1)
         
-        qq_correct = (targets == 2) & (pred_labels == 2)
-        lv_correct = (targets == 1) & (pred_labels == 1)
+        sig_correct = (targets == 1) & (pred_labels == 1)
         
-        self.qqbb_mass.extend(masses_qq[qq_correct].cpu().tolist())
-        self.lvbb_mass.extend(masses_lv[lv_correct].cpu().tolist())
+        self.mWh.extend(mWh[sig_correct].cpu().tolist())
         
         # For significance calculation
         self.true_signal.extend((targets > 0).cpu().tolist())
-        self.probs.extend(probs[:,1:].sum(dim=1).cpu().tolist())
+        self.pred_scores.extend(probs[:,1:].sum(dim=1).cpu().tolist())
         # self.targets.extend(targets.cpu().tolist())
     
     def reset(self, log_level):
@@ -642,10 +575,9 @@ class HEPMetrics:
         if log_level > 2:
             self.by_mass_signal_selection.reset()
             self.confusion.reset()
-            self.qqbb_mass = []
-            self.lvbb_mass = []
+            self.mWh = []
             self.true_signal = []
-            self.probs = []
+            self.pred_scores = []
         # self.targets = []
 
     def compute_and_log(self, epoch, prefix="val", step=None, log_level=0, save=True):
@@ -663,10 +595,8 @@ class HEPMetrics:
             signal_metrics = self.signal_selection.compute()
             for level, values in signal_metrics.items():
                 metrics.update({
-                    f"{prefix}/{level}/lvbb_threshold": values['lvbb_threshold'],
-                    f"{prefix}/{level}/qqbb_threshold": values['qqbb_threshold'],
-                    f"{prefix}/{level}/bkg_lvbb_expected": values['bkg_lvbb_expected'],
-                    f"{prefix}/{level}/bkg_qqbb_expected": values['bkg_qqbb_expected'],
+                    f"{prefix}/{level}/{self.channel}_threshold": values[f'{self.channel}_threshold'],
+                    f"{prefix}/{level}/bkg_{self.channel}_expected": values[f'bkg_{self.channel}_expected'],
                 })
         if log_level > 1:
             pass
@@ -676,13 +606,11 @@ class HEPMetrics:
             signal_metrics = self.by_mass_signal_selection.compute()
             for level_dsid, values in signal_metrics.items():
                 metrics.update({
-                    f"{prefix}_ByMassAcceptance/lvbb_threshold/{level_dsid[0]}_{DSID_MASS_MAPPING[level_dsid[1]]}": values['lvbb_threshold'],
-                    f"{prefix}_ByMassAcceptance/qqbb_threshold/{level_dsid[0]}_{DSID_MASS_MAPPING[level_dsid[1]]}": values['qqbb_threshold'],
-                    f"{prefix}_ByMassAcceptance/bkg_lvbb_expected/{level_dsid[0]}_{DSID_MASS_MAPPING[level_dsid[1]]}": values['bkg_lvbb_expected'],
-                    f"{prefix}_ByMassAcceptance/bkg_qqbb_expected/{level_dsid[0]}_{DSID_MASS_MAPPING[level_dsid[1]]}": values['bkg_qqbb_expected'],
+                    f"{prefix}_ByMassAcceptance/{self.channel}_threshold/{level_dsid[0]}_{DSID_MASS_MAPPING[level_dsid[1]]}": values[f'{self.channel}_threshold'],
+                    f"{prefix}_ByMassAcceptance/bkg_{self.channel}_expected/{level_dsid[0]}_{DSID_MASS_MAPPING[level_dsid[1]]}": values[f'bkg_{self.channel}_expected'],
                 })
             # Confusion matrix plot
-            conf_fig = self.confusion.plot(class_names=['Bkg', 'Lep', 'Had'])
+            conf_fig = self.confusion.plot(class_names=['Bkg', self.channel])
             metrics[f"{prefix}/confusion_matrix"] = wandb.Image(conf_fig)
             plt.close(conf_fig)
             # conf_mat = self.confusion.compute().cpu().numpy()
@@ -695,20 +623,15 @@ class HEPMetrics:
             # plt.close(fig)
         
             # Mass histograms
-            if len(self.qqbb_mass) > 0:
-                metrics[f"{prefix}/qqbb_mass"] = wandb.Histogram(
-                    np.array(self.qqbb_mass), 
-                    num_bins=self.mass_bins
-                )
-            if len(self.lvbb_mass) > 0:
-                metrics[f"{prefix}/lvbb_mass"] = wandb.Histogram(
-                    np.array(self.lvbb_mass),
+            if len(self.mWh) > 0:
+                metrics[f"{prefix}/mWh"] = wandb.Histogram(
+                    np.array(self.mWh), 
                     num_bins=self.mass_bins
                 )
         
             # Significance calculation
             if prefix == "val":
-                fpr, tpr, thresholds = roc_curve(self.true_signal, self.probs)
+                fpr, tpr, thresholds = roc_curve(self.true_signal, self.pred_scores)
                 s = tpr * np.sum(np.array(self.true_signal))
                 b = fpr * np.sum(~np.array(self.true_signal))
                 significance = s / np.sqrt(b + 1e-6)
@@ -742,7 +665,7 @@ class HEPLoss(torch.nn.Module):
         self.alpha = alpha
         self.target_mass = target_mass
         
-    def forward(self, inputs, targets, weights, log, masses_qq, masses_lv):
+    def forward(self, inputs, targets, weights, log, mWh):
         ce_loss = self.ce(inputs, targets) * weights
         
         # Mass regularization

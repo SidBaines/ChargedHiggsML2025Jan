@@ -48,7 +48,7 @@ def save_current_script(destination_directory):
     destination_path = os.path.join(destination_directory, os.path.basename(current_script_path))
     shutil.copy(current_script_path, destination_path)
     print(f"This script copied to: {destination_path}")
-save_current_script('%s'%(saveDir))
+# save_current_script('%s'%(saveDir))
 
 # Some choices about the training process
 # Assumes that the data has already been binarised
@@ -84,7 +84,7 @@ train_dataloader = ProportionalMemoryMappedDataset(
                  is_train=True,
                  n_targets=N_TARGETS,
                  shuffle=SHUFFLE_OBJECTS,
-                 train_split=0.5,
+                 train_split=0.05,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
@@ -229,7 +229,7 @@ num_epochs = 200
 
 # %%
 model, train_loader, val_loader = models[model_n]['model'], train_dataloader, val_dataloader
-log_interval = 5
+log_interval = 20
 config = {
         "learning_rate": 1e-4,
         "learning_rate_low": 1e-5,
@@ -239,16 +239,16 @@ config = {
         "epochs": num_epochs,
         "batch_size": batch_size,
         "wandb":True,
-        "name":"_LowLevel_" + timeStr,
+        "name":"_"+timeStr+"_LowLevel",
     }
 if config['wandb']:
     init_wandb(config)
     # wandb.watch(model, log_freq=100)
 criterion = HEPLoss()
-train_metrics = HEPMetrics(total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[0.05, 0.1, 0.25, 0.5, 0.75]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
-val_metrics = HEPMetrics(total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[0.05, 0.1, 0.25, 0.5, 0.75])
-train_metrics_MCWts = HEPMetrics(total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[0.05, 0.1, 0.25, 0.5, 0.75]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
-val_metrics_MCWts = HEPMetrics(total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[0.05, 0.1, 0.25, 0.5, 0.75])
+train_metrics = HEPMetrics(total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
+val_metrics = HEPMetrics(total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000])
+train_metrics_MCWts = HEPMetrics(total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
+val_metrics_MCWts = HEPMetrics(total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000])
 global_step = 0
 for epoch in range(num_epochs):
     # Update learning rate based on the cosine scheduler
@@ -288,41 +288,26 @@ for epoch in range(num_epochs):
         train_metrics_MCWts.update(outputs, y.argmax(dim=-1), MCWts, mqq, mlv, dsids)
         if (n_step % 10) == 0:
             print('[%d/%d][%d/%d]\tLoss_C: %.4e' %(epoch, num_epochs, n_step, orig_len_train_dataloader, loss.item()))
-            # Log training metrics every log_interval batches
+        # Log training metrics every log_interval batches
         if ((batch_idx % log_interval) == 0):
-            train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=1, save=config['wandb'])
-            train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=1, save=config['wandb'])
-            # assert(False)
-            train_metrics.reset(log_level=1)  # Reset after logging to track fresh metrics
-            train_metrics_MCWts.reset(log_level=1)  # Reset after logging to track fresh metrics
-            
+            log_level = 2 if ((batch_idx % (log_interval*5)) == 0) else 0
+            train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'])
+            train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'])
+            train_metrics.reset(log_level=log_level)  # Reset after logging to track fresh metrics
+            train_metrics_MCWts.reset(log_level=log_level)  # Reset after logging to track fresh metrics
             # Log learning rate
             current_lr = optimizer.param_groups[0]['lr']
             if config['wandb']:
                 wandb.log({"train/lr": current_lr}, step=global_step)
-            
-            # # Log sample predictions
-            # sample_probs = F.softmax(outputs[:5], dim=1).detach().cpu().numpy()
-            # sample_preds = outputs[:5].argmax(dim=1).detach().cpu().numpy()
-            # sample_targets = y[:5].detach().cpu().numpy()
-            # if config['wandb']:
-            #     wandb.log({
-            #         "train/sample_predictions": wandb.Table(
-            #             columns=["Target", "Predicted", "Probabilities"],
-            #             data=[
-            #                 [sample_targets[i], sample_preds[i], sample_probs[i]] 
-            #                 for i in range(len(sample_targets))
-            #             ]
-            #         )
-            #     }, step=global_step)
-        
         global_step += 1
+    
     if config['wandb']:
         wandb.log({'train/loss_total':train_loss_epoch/sum_weights_epoch}, commit=False)
-        train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=2, save=config['wandb'])
-        train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=2, save=config['wandb'])
-        train_metrics.reset(log_level=2)  # Reset after logging to track fresh metrics
-        train_metrics_MCWts.reset(log_level=2)  # Reset after logging to track fresh metrics
+        log_level = 3
+        train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'])
+        train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'])
+        train_metrics.reset(log_level=log_level)  # Reset after logging to track fresh metrics
+        train_metrics_MCWts.reset(log_level=log_level)  # Reset after logging to track fresh metrics
         # Log learning rate
         current_lr = optimizer.param_groups[0]['lr']
         wandb.log({"train/lr": current_lr}, step=global_step)
@@ -353,7 +338,7 @@ for epoch in range(num_epochs):
                 continue
 
             x, y, w, types, y_eval, mqq, mlv, MCWts = batch.values()
-            x, y, w, types, mqq, mlv, MCWts = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device), MCWts.to(device)
+            # x, y, w, types, mqq, mlv, MCWts = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device), MCWts.to(device)
             _, _, dsids = torch.tensor(decode_y_eval_to_info(y_eval.cpu().numpy())).to(torch.float).to(device)
             
             outputs = model(x, types)
@@ -373,10 +358,11 @@ for epoch in range(num_epochs):
     
     # Log validation metrics
     if config['wandb']:
-        val_metrics.compute_and_log(epoch, prefix="val", step=global_step, log_level=2, save=config['wandb'])
-        val_metrics_MCWts.compute_and_log(epoch, prefix="val_MC", step=global_step, log_level=2, save=config['wandb'])
-        val_metrics.reset(log_level=2)
-        val_metrics_MCWts.reset(log_level=2)
+        log_level = 3
+        val_metrics.compute_and_log(epoch, prefix="val", step=global_step, log_level=log_level, save=config['wandb'])
+        val_metrics_MCWts.compute_and_log(epoch, prefix="val_MC", step=global_step, log_level=log_level, save=config['wandb'])
+        val_metrics.reset(log_level=log_level)
+        val_metrics_MCWts.reset(log_level=log_level)
 
     
     # Log model gradients and parameters
