@@ -55,6 +55,8 @@ class ProportionalMemoryMappedDataset:
                  n_targets: int = 3,
                  shuffle: bool = False, # Whether or not to shuffle along the object dimension,
                  signal_reweights: typing.Optional[np.array]=None,
+                 means=None,
+                 stds=None,
                  ):
         """
         Initialize a dataset loader with memory-mapped files for each class (DSID)
@@ -78,6 +80,15 @@ class ProportionalMemoryMappedDataset:
         # Add train/val splitting logic
         self.is_train = is_train
         self.train_split = train_split
+        # Add/populate with defaults the mean/std for scaling inputs
+        if means is not None:
+            self.means = torch.Tensor(means).to(torch.float32).unsqueeze(dim=0).unsqueeze(dim=0)
+        else:
+            self.means = torch.zeros(N_Real_Vars).to(torch.float32).unsqueeze(dim=0).unsqueeze(dim=0)
+        if stds is not None:
+            self.stds = torch.Tensor(stds).to(torch.float32).unsqueeze(dim=0).unsqueeze(dim=0)
+        else:
+            self.stds = torch.ones(N_Real_Vars).to(torch.float32).unsqueeze(dim=0).unsqueeze(dim=0)
 
         self.bkg_weight_sums = 0
         # self.sig_weight_sums = 0
@@ -106,7 +117,7 @@ class ProportionalMemoryMappedDataset:
                     path, 
                     dtype=np.float32,  # adjust dtype as needed
                     mode='r+', 
-                    shape=(total_samples, max_n_objs+1, N_Real_Vars+1)  # adjust shape as per your data
+                    shape=(total_samples, max_n_objs+2, N_Real_Vars+1)  # adjust shape as per your data
                 )
                 self.abs_weight_sums[dsid] = sum_abs_weights
                 self.weight_sums[dsid] = sum_weights
@@ -234,8 +245,8 @@ class ProportionalMemoryMappedDataset:
         batch_samples = np.concatenate(batch_samples)
         # print(f"{batch_samples.shape=}")
         batch_weight_mult_factors = np.concatenate(batch_weight_mult_factors)
-        MC_Wts = batch_samples[:,0,1]
-        batch_samples[:,0,1] *= batch_weight_mult_factors
+        MC_Wts = batch_samples[:,1,0]
+        batch_samples[:,1,0] *= batch_weight_mult_factors
         
         # Shuffle batch
         shuffled_indices = np.arange(len(batch_samples))
@@ -245,17 +256,19 @@ class ProportionalMemoryMappedDataset:
 
         # Now extract the training variables, labels, masses, etc.
         # print(batch_samples)
-        x = torch.from_numpy(batch_samples[:,1:,1:])
-        y = torch.nn.functional.one_hot(torch.Tensor([decode_int_to_training_label[val] for val in batch_samples[:,0,0]]).to(torch.long), num_classes=self.n_targets).to(torch.float)
-        training_Wts = torch.from_numpy(batch_samples[:,0,1])
+        x = torch.from_numpy(batch_samples[:,2:,1:])
+        x = (x - self.means)/self.stds
+        y = torch.nn.functional.one_hot(torch.from_numpy(batch_samples[:,0,0]).to(torch.long), num_classes=self.n_targets).to(torch.float)
+        mH = torch.from_numpy(batch_samples[:,0,1])
         mWh_qqbb = torch.from_numpy(batch_samples[:,0,2])
         mWh_lvbb = torch.from_numpy(batch_samples[:,0,3])
+        training_Wts = torch.from_numpy(batch_samples[:,1,0])
+        dsids = torch.from_numpy(batch_samples[:,1,1])
         MC_Wts = torch.from_numpy(MC_Wts)
         # print(training_Wts)
         training_Wts = np.abs(training_Wts)
-        types = torch.from_numpy(batch_samples[:,1:,0]).to(torch.long)
+        types = torch.from_numpy(batch_samples[:,2:,0]).to(torch.long)
         # print(f"{types.shape=}")
-        y_eval = torch.Tensor(batch_samples[:,0,0]).to(torch.long)
 
         if self.shuffle_objects:
             if 1: # Switch lepton (1st) and neutrino (2nd), then permute all but the neutrino
@@ -294,18 +307,19 @@ class ProportionalMemoryMappedDataset:
         if self.device == 'cuda':
         # if False:
             # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
-            x, y, types, y_eval, training_Wts, mWh_qqbb, mWh_lvbb, MC_Wts = x.pin_memory().to(self.device, non_blocking=True), y.pin_memory().to(self.device, non_blocking=True), types.pin_memory().to(self.device, non_blocking=True), y_eval.pin_memory().to(self.device, non_blocking=True), training_Wts.pin_memory().to(self.device, non_blocking=True), mWh_qqbb.pin_memory().to(self.device, non_blocking=True), mWh_lvbb.pin_memory().to(self.device, non_blocking=True), MC_Wts.pin_memory().to(self.device, non_blocking=True)
+            x, y, types, dsids, training_Wts, mWh_qqbb, mWh_lvbb, MC_Wts, mH = x.pin_memory().to(self.device, non_blocking=True), y.pin_memory().to(self.device, non_blocking=True), types.pin_memory().to(self.device, non_blocking=True), dsids.pin_memory().to(self.device, non_blocking=True), training_Wts.pin_memory().to(self.device, non_blocking=True), mWh_qqbb.pin_memory().to(self.device, non_blocking=True), mWh_lvbb.pin_memory().to(self.device, non_blocking=True), MC_Wts.pin_memory().to(self.device, non_blocking=True), mH.pin_memory().to(self.device, non_blocking=True)
         else:
-            x, y, types, y_eval, training_Wts, mWh_qqbb, mWh_lvbb, MC_Wts = x.to(self.device), y.to(self.device), types.to(self.device), y_eval.to(self.device), training_Wts.to(self.device), mWh_qqbb.to(self.device), mWh_lvbb.to(self.device), MC_Wts.to(self.device)
+            x, y, types, dsids, training_Wts, mWh_qqbb, mWh_lvbb, MC_Wts, mH = x.to(self.device), y.to(self.device), types.to(self.device), dsids.to(self.device), training_Wts.to(self.device), mWh_qqbb.to(self.device), mWh_lvbb.to(self.device), MC_Wts.to(self.device), mH.to(self.device)
         
         return {'x':x, 
                 'y':y, 
                 'train_wts':training_Wts, 
                 'types':types, 
-                'y_eval':y_eval, 
+                'dsids':dsids,
                 'mWh_qqbb':mWh_qqbb, 
                 'mWh_lvbb':mWh_lvbb, 
                 'MC_Wts':MC_Wts,
+                'mH':mH,
         }
 
     def __len__(self):

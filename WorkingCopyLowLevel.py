@@ -48,7 +48,7 @@ def save_current_script(destination_directory):
     destination_path = os.path.join(destination_directory, os.path.basename(current_script_path))
     shutil.copy(current_script_path, destination_path)
     print(f"This script copied to: {destination_path}")
-# save_current_script('%s'%(saveDir))
+save_current_script('%s'%(saveDir))
 
 # Some choices about the training process
 # Assumes that the data has already been binarised
@@ -67,10 +67,12 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Set up stuff to read in data from bin file
 
 batch_size = 64*32
-DATA_PATH=f'/data/atlas/baines/tmp_SingleXbbSelected_XbbTagged_WithRecoMasses_{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '/'
+DATA_PATH=f'/data/atlas/baines/tmp2_SingleXbbSelected_XbbTagged_WithRecoMasses_{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired/'
+means = np.load(f'{DATA_PATH}mean.npy')[1:]
+stds = np.load(f'{DATA_PATH}std.npy')[1:]
 memmap_paths = {}
 for file_name in os.listdir(DATA_PATH):
-    if 'shape' in file_name:
+    if ('shape' in file_name) or ('npy' in file_name):
         continue
     dsid = file_name[5:11]
     memmap_paths[int(dsid)] = DATA_PATH+file_name
@@ -84,7 +86,9 @@ train_dataloader = ProportionalMemoryMappedDataset(
                  is_train=True,
                  n_targets=N_TARGETS,
                  shuffle=SHUFFLE_OBJECTS,
-                 train_split=0.05,
+                 train_split=0.75,
+                 means=means,
+                 stds=stds,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
@@ -98,11 +102,13 @@ val_dataloader = ProportionalMemoryMappedDataset(
                  is_train=False,
                  n_targets=N_TARGETS,
                  shuffle=SHUFFLE_OBJECTS,
-                 train_split=0.95,
+                 train_split=0.25,
+                 means=means,
+                 stds=stds,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
-# batch = next(train_dataloader)
+batch = next(train_dataloader)
 
 # %%
 
@@ -136,7 +142,7 @@ model_n = 0
 
 # Create the model with the desired properties
 model_cfg = HookedTransformerConfig(
-    d_model=64,
+    d_model=128,
     d_head=8,
     n_layers=8,
     n_heads=4,
@@ -153,6 +159,7 @@ model_cfg = HookedTransformerConfig(
 
 # models[model_n] = {'model' : Net(model_cfg).to(device), 'inputs' : inputs}
 models[model_n] = {'model' : MyHookedTransformer(model_cfg).to(device)}
+print(sum(p.numel() for p in models[model_n]['model'].parameters()))
 
 # %%
 def add_perma_hooks_to_mask_pad_tokens(
@@ -204,8 +211,9 @@ def cosine_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int
     return lr
 
 
-optimizer = torch.optim.Adam(models[model_n]['model'].parameters(), lr=1e-4, weight_decay=1e-5)
-num_epochs = 200
+optimizer = torch.optim.Adam(models[model_n]['model'].parameters(), lr=1e-4, weight_decay=1e-15)
+# SHOULD CHANGE WEIGHT DECAY BACK (IT WAS 1e-5 before)
+num_epochs = 500
 # criterion = nn.CrossEntropyLoss(reduction='none')  # 'none' to handle sample weights
 # for epoch in range(num_epochs):
 #     dataloader._reset_indices()
@@ -230,10 +238,11 @@ num_epochs = 200
 # %%
 model, train_loader, val_loader = models[model_n]['model'], train_dataloader, val_dataloader
 log_interval = 20
+SAVE_MODEL_EVERY = 5
 config = {
         "learning_rate": 1e-4,
         "learning_rate_low": 1e-5,
-        "cosine_lr_n_epochs": 10,   # Number of epochs to complete one cycle of learning rate
+        "cosine_lr_n_epochs": num_epochs,   # Number of epochs to complete one cycle of learning rate
         "architecture": "PhysicsTransformer",
         "dataset": "ATLAS_ChargedHiggs",
         "epochs": num_epochs,
@@ -269,10 +278,8 @@ for epoch in range(num_epochs):
         if (batch_idx >= orig_len_train_dataloader-5):
             continue
         batch = next(train_loader)
-        x, y, w, types, y_eval, mqq, mlv, MCWts = batch.values()
-        x, y, w, types, mqq, mlv, MCWts = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device), MCWts.to(device)
-        _, _, dsids = decode_y_eval_to_info(y_eval.cpu().numpy())
-        dsids = torch.tensor(dsids).to(torch.float).to(device)
+        x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
+        # x, y, w, types, mqq, mlv, MCWts, mH = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device), MCWts.to(device)
         
         optimizer.zero_grad()
         outputs = model(x, types)
@@ -301,8 +308,10 @@ for epoch in range(num_epochs):
                 wandb.log({"train/lr": current_lr}, step=global_step)
         global_step += 1
     
-    if config['wandb']:
-        wandb.log({'train/loss_total':train_loss_epoch/sum_weights_epoch}, commit=False)
+    # if config['wandb']:
+    if 1:
+        if config['wandb']:
+            wandb.log({'train/loss_total':train_loss_epoch/sum_weights_epoch}, commit=False)
         log_level = 3
         train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'])
         train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'])
@@ -310,7 +319,8 @@ for epoch in range(num_epochs):
         train_metrics_MCWts.reset(log_level=log_level)  # Reset after logging to track fresh metrics
         # Log learning rate
         current_lr = optimizer.param_groups[0]['lr']
-        wandb.log({"train/lr": current_lr}, step=global_step)
+        if config['wandb']:
+            wandb.log({"train/lr": current_lr}, step=global_step)
         # Log sample predictions
         sample_probs = F.softmax(outputs[:5], dim=1).detach().cpu().numpy()
         sample_preds = outputs[:5].argmax(dim=1).detach().cpu().numpy()
@@ -337,9 +347,8 @@ for epoch in range(num_epochs):
             if (batch_idx >= orig_len_val_dataloader-5):
                 continue
 
-            x, y, w, types, y_eval, mqq, mlv, MCWts = batch.values()
+            x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
             # x, y, w, types, mqq, mlv, MCWts = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device), MCWts.to(device)
-            _, _, dsids = torch.tensor(decode_y_eval_to_info(y_eval.cpu().numpy())).to(torch.float).to(device)
             
             outputs = model(x, types)
             loss += criterion(outputs, y, w, config['wandb'], mqq, mlv).sum()
@@ -367,7 +376,7 @@ for epoch in range(num_epochs):
     
     # Log model gradients and parameters
     if 1:
-        if epoch % 5 == 0:
+        if (epoch % 5 == 0) and (config['wandb']):
             if 0:
                 gradients = []
                 for name, param in model.named_parameters():
@@ -408,6 +417,13 @@ for epoch in range(num_epochs):
                 for name, param in model.named_parameters():
                     if param.grad is not None:
                         wandb.log({"gradients/%s"%(name ): wandb.Histogram(param.detach().cpu().numpy())}, commit=False) # Log the gradients (values and edges) to WandB
+    if ((epoch % SAVE_MODEL_EVERY) == (SAVE_MODEL_EVERY-1)):
+        try:
+            modelSaveDir = "%s/models/%d/"%(saveDir, model_n)
+            os.makedirs(modelSaveDir, exist_ok=True)
+            torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d_%d" %(epoch, global_step) + '.pth')
+        except:
+            pass
 wandb.finish()
 
 # %%

@@ -29,7 +29,7 @@ N_TARGETS = 3 # Number of target classes (needed for one-hot encoding)
 N_CTX = 7 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
 BIN_WRITE_TYPE=np.float32
 max_n_objs = 14 # BE CAREFUL because this might change and if it does you ahve to rebinarise
-OUTPUT_DIR = '/data/atlas/baines/tmp_SingleXbbSelected_XbbTagged_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '/'
+OUTPUT_DIR = '/data/atlas/baines/tmp2_SingleXbbSelected_XbbTagged_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 N_Real_Vars=4 # x, y, z, energy, d0val, dzval.  BE CAREFUL because this might change and if it does you ahve to rebinarise
 
@@ -46,55 +46,46 @@ DSID_MASS_MAPPING = {510115:0.8, 510116:0.9, 510117:1.0, 510118:1.2, 510119:1.4,
 MASS_DSID_MAPPING = {v: k for k, v in DSID_MASS_MAPPING.items()} # Create inverse dictionary
 # dsid_set = np.array([410470, 510117, 510123])
 types_set = np.array([-2, 1, 2])  # Try not to change this often - have to re-binarise if we do!
-dsid_type_pair_to_int = {}
-# Also, create dicts to handle different types of decoding:
-#   - one to a training label, which will be an integer to be one-hot encoded
-#   - the other to an evaluation label, which will tell us more info about the sample for plotting/testing performance
-decode_int_to_training_label = {}
-decode_int_to_evaluation_label = {}
-counter = 0  # Start integer for mapping
-for x in dsid_set:
-    for y in types_set:
-        dsid_type_pair_to_int[(x, y)] = counter
-        if (500000<x) and (x<600000):
-            if y == 1:
-                decode_int_to_training_label[counter] = 1
-            elif (y==-2) or (y==2):
-                decode_int_to_training_label[counter] = 2
-            else:
-                assert(False)
-        else:
-            decode_int_to_training_label[counter] = 0
-        decode_int_to_evaluation_label[counter] = [x,y] # Just put all info in for now
-        counter += 1
 
-dsid_type_int_to_pair = {v: k for k, v in dsid_type_pair_to_int.items()} # Create inverse dictionary
-mapping_array_pair_to_int = np.zeros((len(dsid_set), len(types_set)), dtype=int)
-for (x, y), val in dsid_type_pair_to_int.items():
-    i = np.where(dsid_set == x)[0][0]
-    j = np.where(types_set == y)[0][0]
-    mapping_array_pair_to_int[i, j] = val
+# %%
+class RunningStats:
+    def __init__(self, n_features):
+        self.n = 0  # Count of data points seen
+        self.mean = np.zeros(n_features)  # Mean for each feature
+        self.m2 = np.zeros(n_features)  # Sum of squared differences for variance
+    
+    def update(self, x):
+        # x has shape [batch objectZ]
+        n_batch = (x[:,:,0]!=N_CTX-1).sum() # Only include those which actually contribute
+        # Can't decide if we should weight here.
+        #   Since it's just for the numerical precision mainly (rather than phyiscs reason), I don't think it matters
+        
+        
+        # Update count
+        self.n += n_batch
+        if n_batch > 0:    
+            # Update mean
+            delta = x - self.mean
+            delta = delta * np.expand_dims((x[:,:,0]!=N_CTX-1).astype(float), axis=-1) # Only get the ones that actually have particles
+            
+            self.mean += einops.einsum(delta, 'batch object var -> var') / self.n
+            
+            
+            # Update m2 (sum of squared differences)
+            delta2 = x - self.mean
+            self.m2 += einops.einsum(delta * delta2, 'batch object var -> var')
+    
+    def compute_std(self):
+        # Calculate standard deviation using the variance (m2 / n - 1)
+        return np.sqrt(self.m2 / (self.n - 1))
 
-def decode_y_eval_to_info(y_int_array):
-    # Extract DSID and decay_mode for each entry in y_int_array
-    dsid_array = np.array([decode_int_to_evaluation_label[y][0] for y in y_int_array])
-    decay_mode_array = np.array([decode_int_to_evaluation_label[y][1] for y in y_int_array])
-    # Initialize mass and decay_mode_real arrays with default values
-    mass_array = np.zeros_like(dsid_array, dtype=float)
-    decay_mode_real_array = np.zeros_like(decay_mode_array, dtype=int)
-    # Apply conditions for DSID range (500000 < dsid < 600000)
-    valid_dsid_mask = (500000 < dsid_array) & (dsid_array < 600000)
-    # For valid DSID values, lookup mass and calculate decay_mode_real
-    mass_array[valid_dsid_mask] = np.vectorize(DSID_MASS_MAPPING.get)(dsid_array[valid_dsid_mask])
-    # Define decay_mode_real based on decay_mode values
-    decay_mode_real_array[valid_dsid_mask & (decay_mode_array == 1)] = 1
-    decay_mode_real_array[valid_dsid_mask & ((decay_mode_array == 2) | (decay_mode_array == -2))] = 2
-    return mass_array, decay_mode_real_array
+    def get_mean(self):
+        return self.mean
+    
+    def get_variance(self):
+        return self.m2 / (self.n - 1)  # Variance for each feature
 
-
-
-
-
+running_stats = RunningStats(N_Real_Vars+1)
 
 # %%
 # Main function to actually process a single file and return the arrays
@@ -115,7 +106,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
                                     'MET',
                                     'll_best_mWH_qqbb',
                                     'll_best_mWH_lvbb',
-
+                                    'll_best_mH',
                                 ],
                                 labels=['DSID', 'll_truth_decay_mode'],
                                 new_inputs_labels=True
@@ -200,6 +191,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     selection_category = x_event[:,1]
     mWh_qqbb = x_event[:,3]
     mWh_lvbb = x_event[:,4]
+    mH = x_event[:,5]
     if MET_CUT_ON:
         met = x_event[:,2]
 
@@ -221,13 +213,14 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     event_weights = event_weights[~(no_ljet | selection_removals | low_MET)]
     mWh_qqbb = mWh_qqbb[~(no_ljet | selection_removals | low_MET)]
     mWh_lvbb = mWh_lvbb[~(no_ljet | selection_removals | low_MET)]
+    mH = mH[~(no_ljet | selection_removals | low_MET)]
     type_part = type_part[~(no_ljet | selection_removals | low_MET)]
     
 
     # HERE Need to write some code to store this properly
-    first_indices = np.searchsorted(dsid_set, y[:, 0])
-    second_indices = np.searchsorted(types_set, y[:, 1])
-    y_mapped = mapping_array_pair_to_int[first_indices, second_indices]
+    # dsid = np.searchsorted(dsid_set, y[:, 0])
+    dsid = y[:, 0]
+    y = np.searchsorted(types_set, y[:, 1])
 
     # Reshape the x array to how we want to read it in later
     x_part = einops.rearrange(x_part, 'batch d_input object -> batch object d_input')
@@ -254,22 +247,26 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
                     permuted_indices = np.random.permutation(max_n_objs)
                     # Shuffle the non-zero elements along the object dimension
                     result[i,:max_n_objs] = result[i, permuted_indices]
-        return result[:,:max_n_objs,:N_Real_Vars+1], y_mapped, event_weights, removals, mWh_qqbb, mWh_lvbb
+        return result[:,:max_n_objs,:N_Real_Vars+1], y, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH
     else:
-        return x_part[:,:max_n_objs,:N_Real_Vars+1], y_mapped, event_weights, removals, mWh_qqbb, mWh_lvbb
+        return x_part[:,:max_n_objs,:N_Real_Vars+1], y, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH
 
-def combine_arrays_for_writing(x_chunk, y_chunk, weights_chunk, mWh_qqbbs_chunk, mWh_lvbbs_chunk):
+def combine_arrays_for_writing(x_chunk, y_chunk, dsid_chunk, weights_chunk, mWh_qqbbs_chunk, mWh_lvbbs_chunk, mH_chunk):
     # print(type(y_chunk))
     # print(y_chunk.shape)
     y_chunk = einops.repeat(y_chunk,'b -> b 1 nvars', nvars=x_chunk.shape[-1]).astype(BIN_WRITE_TYPE)
     # print(type(y_chunk))
     # print(y_chunk.shape)
-    y_chunk[:, 0, 1] = weights_chunk.squeeze()
+    y_chunk[:, 0, 1] = mH_chunk.squeeze()
     y_chunk[:, 0, 2] = mWh_qqbbs_chunk.squeeze()
     y_chunk[:, 0, 3] = mWh_lvbbs_chunk.squeeze()
+    extra_info_chunk = np.zeros_like(y_chunk)
+    extra_info_chunk[:, 0, 0] = weights_chunk.squeeze()
+    extra_info_chunk[:, 0, 1] = dsid_chunk.squeeze()
     array_to_write=np.float32(np.concatenate(
         [
             y_chunk,
+            extra_info_chunk,
             x_chunk
         ],
     axis=-2
@@ -287,8 +284,8 @@ MAX_CHUNK_SIZE = 100000
 # MAX_PER_DSID[410470] = 100
 for dsid in dsid_set:
     # if dsid != 363489:
-    if dsid >= 700340:
-        continue
+    # if dsid <= 700340:
+    #     continue
 # for dsid in [510120]:
     # if ((500000<dsid) and (600000>dsid)) or (dsid==410470):
     # if (dsid==410470):
@@ -318,9 +315,11 @@ for dsid in dsid_set:
     #     continue
     x_parts=[]
     ys=[]
+    dsids=[]
     weights = []
     mWH_qqbbs = []
     mWH_lvbbs = []
+    mHs = []
     current_chunk_size = 0
     total_events_written_for_sample = 0
     total_entries_written_for_sample = 0
@@ -334,15 +333,20 @@ for dsid in dsid_set:
         # print(path)
         # if path == '/data/atlas/HplusWh/20241128_ProcessedLightNtuples/user.rhulsken.mc16_13TeV.363355.She221_ZqqZvv.TOPQ1.e5525s3126r10201p4512.Nominal_v0_1l_out_root/user.rhulsken.31944615._000001.out.root':
         #     continue
-        x_chunk, y_chunk, weights_chunk, removals_chunk, mWh_qqbb_chunk, mWh_lvbb_chunk = process_single_file(filepath=path, max_n_objs=max_n_objs, shuffle_objs=SHUFFLE_OBJECTS)
+        x_chunk, y_chunk, dsid_chunk, weights_chunk, removals_chunk, mWh_qqbb_chunk, mWh_lvbb_chunk, mH_chunk = process_single_file(filepath=path, max_n_objs=max_n_objs, shuffle_objs=SHUFFLE_OBJECTS)
         x_parts.append(x_chunk)
         ys.append(y_chunk)
+        dsids.append(dsid_chunk)
         weights.append(weights_chunk)
         mWH_qqbbs.append(mWh_qqbb_chunk)
         mWH_lvbbs.append(mWh_lvbb_chunk)
+        mHs.append(mH_chunk)
+        # if x_chunk.shape[0]:
+        #     assert(False)
+        running_stats.update(x_chunk)
         current_chunk_size += x_chunk.shape[0]
         if (current_chunk_size > MAX_CHUNK_SIZE) or (file_n+1 == len(all_files)):
-            array_chunk = combine_arrays_for_writing(x_chunk=np.concatenate(x_parts, axis=0), y_chunk=np.concatenate(ys, axis=0), weights_chunk=np.concatenate(weights, axis=0), mWh_qqbbs_chunk=np.concatenate(mWH_qqbbs, axis=0), mWh_lvbbs_chunk=np.concatenate(mWH_lvbbs, axis=0))
+            array_chunk = combine_arrays_for_writing(x_chunk=np.concatenate(x_parts, axis=0), y_chunk=np.concatenate(ys, axis=0), dsid_chunk=np.concatenate(dsids, axis=0), weights_chunk=np.concatenate(weights, axis=0), mWh_qqbbs_chunk=np.concatenate(mWH_qqbbs, axis=0), mWh_lvbbs_chunk=np.concatenate(mWH_lvbbs, axis=0), mH_chunk=np.concatenate(mHs, axis=0))
             # assert(False)
             if array_chunk.shape[0] > 0: # Check there's actually something in there
                 # memmap = np.memmap(memmap_path, dtype=BIN_WRITE_TYPE, mode='r+', offset=total_entries_written_for_sample*array_chunk.itemsize, shape=array_chunk.shape)
@@ -358,9 +362,11 @@ for dsid in dsid_set:
             current_chunk_size = 0
             x_parts=[]
             ys=[]
+            dsids=[]
             weights = []
             mWH_qqbbs = []
             mWH_lvbbs = []
+            mHs = []
         removals[0]+=removals_chunk[0]
         removals[1]+=removals_chunk[1]
         nfs+=1
@@ -377,6 +383,12 @@ for dsid in dsid_set:
     print("Total bkg removed for no ljet/MET Cut/Selection category fail: %d" %(removals[0]))
     print("Total sig removed for no ljet/MET Cut/Selection category fail: %d" %(removals[1]))
 
+
+print("Feature means: ", running_stats.get_mean())
+print("Feature std devs: ", running_stats.compute_std())
+# Optionally, you can save these stats for later use in a scaler
+np.save(os.path.join(OUTPUT_DIR, f'mean.npy'), running_stats.get_mean())
+np.save(os.path.join(OUTPUT_DIR, f'std.npy'), running_stats.compute_std())
 
 
 # %%
