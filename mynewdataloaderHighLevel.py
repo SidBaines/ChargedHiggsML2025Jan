@@ -82,7 +82,7 @@ class ProportionalMemoryMappedDatasetHighLevel:
                     path, 
                     dtype=np.float32,  # adjust dtype as needed
                     mode='r+', 
-                    shape=(total_samples, N_Real_Vars+4)  # adjust shape as per your data
+                    shape=(total_samples, N_Real_Vars+5)  # adjust shape as per your data
                 )
                 self.abs_weight_sums[dsid] = sum_abs_weights
                 self.weight_sums[dsid] = sum_weights
@@ -227,15 +227,18 @@ class ProportionalMemoryMappedDatasetHighLevel:
 
         
         # Now extract the training variables, labels, masses, etc.
-        y = torch.nn.functional.one_hot(torch.Tensor(batch_samples[:,0]).to(torch.long)).to(torch.float)
+        y = torch.nn.functional.one_hot(torch.Tensor(batch_samples[:,0]).to(torch.long), 3).to(torch.float)
         if (y[:,1].sum().item() == 0):
             y = y[:,[0,2]]
+        elif (y[:,2].sum().item() == 0):
+            y = y[:,[0,1]]
         assert(y.shape[1]==self.n_targets)
         training_Wts = torch.from_numpy(batch_samples[:,1])
         # print(training_Wts.sum())
         mWh = torch.from_numpy(batch_samples[:,2])
         dsid = torch.from_numpy(batch_samples[:,3])
-        x = torch.from_numpy(batch_samples[:,4:])
+        mH = torch.from_numpy(batch_samples[:,4])
+        x = torch.from_numpy(batch_samples[:,5:])
         x = (x - self.means)/self.stds
         MC_Wts = torch.from_numpy(MC_Wts).reshape(training_Wts.shape)
         # print(training_Wts)
@@ -254,6 +257,7 @@ class ProportionalMemoryMappedDatasetHighLevel:
                 'dsid':dsid,
                 'train_wts':training_Wts, 
                 'MC_Wts':MC_Wts,
+                'mH':mH,
         }
 
     def __len__(self):

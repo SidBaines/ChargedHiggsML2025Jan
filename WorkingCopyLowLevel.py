@@ -53,8 +53,10 @@ save_current_script('%s'%(saveDir))
 # Some choices about the training process
 # Assumes that the data has already been binarised
 SHUFFLE_OBJECTS = False
+NORMALISE_DATA = False
 CONVERT_TO_PT_PHI_ETA_M = False
 MET_CUT_ON = True
+MH_SEL = False
 N_TARGETS = 3 # Number of target classes (needed for one-hot encoding)
 N_CTX = 7 # the six types of object, plus one for 'no object;. We need to hardcode this unfortunately
 BIN_WRITE_TYPE=np.float32
@@ -66,10 +68,14 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # %%
 # Set up stuff to read in data from bin file
 
-batch_size = 64*32
-DATA_PATH=f'/data/atlas/baines/tmp2_SingleXbbSelected_XbbTagged_WithRecoMasses_{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired/'
-means = np.load(f'{DATA_PATH}mean.npy')[1:]
-stds = np.load(f'{DATA_PATH}std.npy')[1:]
+batch_size = 64*64
+DATA_PATH=f'/data/atlas/baines/tmp2_SingleXbbSelected_XbbTagged_WithRecoMasses_{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired' + '_mHSel'*MH_SEL + '/'
+if NORMALISE_DATA:
+    means = np.load(f'{DATA_PATH}mean.npy')[1:]
+    stds = np.load(f'{DATA_PATH}std.npy')[1:]
+else:
+    means = None
+    stds = None
 memmap_paths = {}
 for file_name in os.listdir(DATA_PATH):
     if ('shape' in file_name) or ('npy' in file_name):
@@ -86,7 +92,7 @@ train_dataloader = ProportionalMemoryMappedDataset(
                  is_train=True,
                  n_targets=N_TARGETS,
                  shuffle=SHUFFLE_OBJECTS,
-                 train_split=0.75,
+                 train_split=0.5,
                  means=means,
                  stds=stds,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
@@ -102,7 +108,7 @@ val_dataloader = ProportionalMemoryMappedDataset(
                  is_train=False,
                  n_targets=N_TARGETS,
                  shuffle=SHUFFLE_OBJECTS,
-                 train_split=0.25,
+                 train_split=0.1,
                  means=means,
                  stds=stds,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
@@ -142,14 +148,15 @@ model_n = 0
 
 # Create the model with the desired properties
 model_cfg = HookedTransformerConfig(
-    d_model=128,
+    normalization_type='LN',
+    d_model=32,
     d_head=8,
     n_layers=8,
     n_heads=4,
     n_ctx=N_CTX, # Max number of types of object per event + 1 because we want a dummy row in the embedding matrix for non-existing particles
     d_vocab=N_Real_Vars, # Number of inputs per object
     d_vocab_out=N_TARGETS,  # 2 because we're doing binary classification
-    d_mlp=256,
+    d_mlp=128,
     attention_dir="bidirectional",  # defaults to "causal"
     act_fn="relu",
     use_attn_result=True,
@@ -211,9 +218,7 @@ def cosine_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int
     return lr
 
 
-optimizer = torch.optim.Adam(models[model_n]['model'].parameters(), lr=1e-4, weight_decay=1e-15)
 # SHOULD CHANGE WEIGHT DECAY BACK (IT WAS 1e-5 before)
-num_epochs = 500
 # criterion = nn.CrossEntropyLoss(reduction='none')  # 'none' to handle sample weights
 # for epoch in range(num_epochs):
 #     dataloader._reset_indices()
@@ -237,8 +242,9 @@ num_epochs = 500
 
 # %%
 model, train_loader, val_loader = models[model_n]['model'], train_dataloader, val_dataloader
+num_epochs = 500
 log_interval = 20
-SAVE_MODEL_EVERY = 5
+SAVE_MODEL_EVERY = 20
 config = {
         "learning_rate": 1e-4,
         "learning_rate_low": 1e-5,
@@ -249,7 +255,9 @@ config = {
         "batch_size": batch_size,
         "wandb":True,
         "name":"_"+timeStr+"_LowLevel",
+        "weight_decay":1e-3,
     }
+optimizer = torch.optim.Adam(models[model_n]['model'].parameters(), lr=1e-4, weight_decay=config['weight_decay'])
 if config['wandb']:
     init_wandb(config)
     # wandb.watch(model, log_freq=100)
@@ -268,6 +276,10 @@ for epoch in range(num_epochs):
     # Training phase
     train_loader._reset_indices()
     val_loader._reset_indices()
+    train_metrics.reset(log_level=3)
+    train_metrics_MCWts.reset(log_level=3)
+    val_metrics.reset(log_level=3)
+    val_metrics_MCWts.reset(log_level=3)
     model.train()
     n_step = 0
     orig_len_train_dataloader=len(train_loader)
@@ -291,8 +303,8 @@ for epoch in range(num_epochs):
         optimizer.step()
         
         # Update training metrics
-        train_metrics.update(outputs, y.argmax(dim=-1), w, mqq, mlv, dsids)
-        train_metrics_MCWts.update(outputs, y.argmax(dim=-1), MCWts, mqq, mlv, dsids)
+        train_metrics.update(outputs, y.argmax(dim=-1), w, mqq, mlv, dsids, mHs)
+        train_metrics_MCWts.update(outputs, y.argmax(dim=-1), MCWts, mqq, mlv, dsids, mHs)
         if (n_step % 10) == 0:
             print('[%d/%d][%d/%d]\tLoss_C: %.4e' %(epoch, num_epochs, n_step, orig_len_train_dataloader, loss.item()))
         # Log training metrics every log_interval batches
@@ -312,66 +324,68 @@ for epoch in range(num_epochs):
     if 1:
         if config['wandb']:
             wandb.log({'train/loss_total':train_loss_epoch/sum_weights_epoch}, commit=False)
-        log_level = 3
-        train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'])
-        train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'])
-        train_metrics.reset(log_level=log_level)  # Reset after logging to track fresh metrics
-        train_metrics_MCWts.reset(log_level=log_level)  # Reset after logging to track fresh metrics
-        # Log learning rate
-        current_lr = optimizer.param_groups[0]['lr']
-        if config['wandb']:
-            wandb.log({"train/lr": current_lr}, step=global_step)
-        # Log sample predictions
-        sample_probs = F.softmax(outputs[:5], dim=1).detach().cpu().numpy()
-        sample_preds = outputs[:5].argmax(dim=1).detach().cpu().numpy()
-        sample_targets = y[:5].detach().cpu().numpy()
-        if config['wandb']:
-            wandb.log({
-                "train/sample_predictions": wandb.Table(
-                    columns=["Target", "Predicted", "Probabilities"],
-                    data=[
-                        [sample_targets[i], sample_preds[i], sample_probs[i]] 
-                        for i in range(len(sample_targets))
-                    ]
-                )
-            }, step=global_step)
+        if (epoch % 3) == 0:
+            log_level = 3
+            train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'])
+            train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'])
+            train_metrics.reset(log_level=log_level)  # Reset after logging to track fresh metrics
+            train_metrics_MCWts.reset(log_level=log_level)  # Reset after logging to track fresh metrics
+            # Log learning rate
+            current_lr = optimizer.param_groups[0]['lr']
+            if config['wandb']:
+                wandb.log({"train/lr": current_lr}, step=global_step)
+            # Log sample predictions
+            sample_probs = F.softmax(outputs[:5], dim=1).detach().cpu().numpy()
+            sample_preds = outputs[:5].argmax(dim=1).detach().cpu().numpy()
+            sample_targets = y[:5].detach().cpu().numpy()
+            if config['wandb']:
+                wandb.log({
+                    "train/sample_predictions": wandb.Table(
+                        columns=["Target", "Predicted", "Probabilities"],
+                        data=[
+                            [sample_targets[i], sample_preds[i], sample_probs[i]] 
+                            for i in range(len(sample_targets))
+                        ]
+                    )
+                }, step=global_step)
     
-    # Validation phase
-    model.eval()
-    with torch.no_grad():
-        orig_len_val_dataloader=len(val_loader)
-        loss = 0
-        wt_sum = 0
-        for batch_idx in range(orig_len_val_dataloader):
-            batch = next(val_loader)
-            if (batch_idx >= orig_len_val_dataloader-5):
-                continue
+    if (epoch % 3) == 0:
+        # Validation phase
+        model.eval()
+        with torch.no_grad():
+            orig_len_val_dataloader=len(val_loader)
+            loss = 0
+            wt_sum = 0
+            for batch_idx in range(orig_len_val_dataloader):
+                batch = next(val_loader)
+                if (batch_idx >= orig_len_val_dataloader-5):
+                    continue
 
-            x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
-            # x, y, w, types, mqq, mlv, MCWts = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device), MCWts.to(device)
-            
-            outputs = model(x, types)
-            loss += criterion(outputs, y, w, config['wandb'], mqq, mlv).sum()
-            wt_sum += w.sum()
-            val_metrics.update(outputs, y.argmax(dim=-1), w, mqq, mlv, dsids)
-            val_metrics_MCWts.update(outputs, y.argmax(dim=-1), MCWts, mqq, mlv, dsids)
-            # print('[%d/%d][%d/%d] Val' %(epoch, num_epochs, batch_idx, orig_len_val_dataloader))
+                x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
+                # x, y, w, types, mqq, mlv, MCWts = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device), MCWts.to(device)
+                
+                outputs = model(x, types)
+                loss += criterion(outputs, y, w, config['wandb'], mqq, mlv).sum()
+                wt_sum += w.sum()
+                val_metrics.update(outputs, y.argmax(dim=-1), w, mqq, mlv, dsids, mHs)
+                val_metrics_MCWts.update(outputs, y.argmax(dim=-1), MCWts, mqq, mlv, dsids, mHs)
+                # print('[%d/%d][%d/%d] Val' %(epoch, num_epochs, batch_idx, orig_len_val_dataloader))
+            if config['wandb']:
+                wandb.log({
+                    "val/loss_total": loss.item()/wt_sum.item(),
+                    "val/loss_ce": loss.item()/wt_sum.item(),
+                    # "loss/qq_mass": qq_mass_loss.item(),
+                    # "loss/lv_mass": lv_mass_loss.item()
+                })
+            print('[%d/%d][%d/%d]\tVAL Loss_C: %.4e' %(epoch, num_epochs, batch_idx, orig_len_val_dataloader, loss.item()/wt_sum.item()))
+        
+        # Log validation metrics
         if config['wandb']:
-            wandb.log({
-                "val/loss_total": loss.item()/wt_sum.item(),
-                "val/loss_ce": loss.item()/wt_sum.item(),
-                # "loss/qq_mass": qq_mass_loss.item(),
-                # "loss/lv_mass": lv_mass_loss.item()
-            })
-        print('[%d/%d][%d/%d]\tVAL Loss_C: %.4e' %(epoch, num_epochs, batch_idx, orig_len_val_dataloader, loss.item()/wt_sum.item()))
-    
-    # Log validation metrics
-    if config['wandb']:
-        log_level = 3
-        val_metrics.compute_and_log(epoch, prefix="val", step=global_step, log_level=log_level, save=config['wandb'])
-        val_metrics_MCWts.compute_and_log(epoch, prefix="val_MC", step=global_step, log_level=log_level, save=config['wandb'])
-        val_metrics.reset(log_level=log_level)
-        val_metrics_MCWts.reset(log_level=log_level)
+            log_level = 3
+            val_metrics.compute_and_log(epoch, prefix="val", step=global_step, log_level=log_level, save=config['wandb'])
+            val_metrics_MCWts.compute_and_log(epoch, prefix="val_MC", step=global_step, log_level=log_level, save=config['wandb'])
+            val_metrics.reset(log_level=log_level)
+            val_metrics_MCWts.reset(log_level=log_level)
 
     
     # Log model gradients and parameters

@@ -23,13 +23,14 @@ from utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtE
 # Some choices about the  process
 SHUFFLE_OBJECTS = False
 CONVERT_TO_PT_PHI_ETA_M = False
+MH_SEL = True
 MET_CUT_ON = True
 REQUIRE_XBB = True
 N_TARGETS = 3 # Number of target classes (needed for one-hot encoding)
 N_CTX = 7 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
 BIN_WRITE_TYPE=np.float32
 max_n_objs = 14 # BE CAREFUL because this might change and if it does you ahve to rebinarise
-OUTPUT_DIR = '/data/atlas/baines/tmp2_SingleXbbSelected_XbbTagged_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '/'
+OUTPUT_DIR = '/data/atlas/baines/tmp2_SingleXbbSelected_XbbTagged_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 N_Real_Vars=4 # x, y, z, energy, d0val, dzval.  BE CAREFUL because this might change and if it does you ahve to rebinarise
 
@@ -206,15 +207,20 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
         low_MET = met < 30e3 # 30GeV Minimum for MET
     else:
         low_MET = np.ones_like(no_ljet).astype(bool)
-    removals = {0: ((no_ljet | selection_removals | low_MET) & (~is_sig)).sum(),
-                1: ((no_ljet | selection_removals | low_MET) & is_sig).sum()}
-    x_part = x_part[~(no_ljet | selection_removals | low_MET)]
-    y = y[~(no_ljet | selection_removals | low_MET)]
-    event_weights = event_weights[~(no_ljet | selection_removals | low_MET)]
-    mWh_qqbb = mWh_qqbb[~(no_ljet | selection_removals | low_MET)]
-    mWh_lvbb = mWh_lvbb[~(no_ljet | selection_removals | low_MET)]
-    mH = mH[~(no_ljet | selection_removals | low_MET)]
-    type_part = type_part[~(no_ljet | selection_removals | low_MET)]
+    if MH_SEL:
+        mH_cut = (mH < 95e3) | (mH > 140e3)
+    else:
+        mH_cut = np.ones_like(no_ljet).astype(bool)
+    combined_removal = (no_ljet | selection_removals | low_MET | mH_cut)
+    removals = {0: (combined_removal & (~is_sig)).sum(),
+                1: (combined_removal & is_sig).sum()}
+    x_part = x_part[~combined_removal]
+    y = y[~combined_removal]
+    event_weights = event_weights[~combined_removal]
+    mWh_qqbb = mWh_qqbb[~combined_removal]
+    mWh_lvbb = mWh_lvbb[~combined_removal]
+    mH = mH[~combined_removal]
+    type_part = type_part[~combined_removal]
     
 
     # HERE Need to write some code to store this properly

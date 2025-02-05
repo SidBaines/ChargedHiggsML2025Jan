@@ -23,9 +23,10 @@ import matplotlib.pyplot as plt
 # %% Some basic setup
 # Some choices about the  process
 MET_CUT_ON = True
+MH_SEL = False
 REQUIRE_XBB = True
 BIN_WRITE_TYPE=np.float32
-OUTPUT_DIR = '/data/atlas/baines/tmp2_highLevel' + '_MetCut'*MET_CUT_ON + '/'
+OUTPUT_DIR = '/data/atlas/baines/tmp3_highLevel' + '_MetCut'*MET_CUT_ON + '_mHSel'*MH_SEL + '/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Create a mapping from the dsid/decay-type pair to integers, for the purposes of binarising data.
@@ -85,7 +86,8 @@ def process_single_file(filepath, target_channel):
     event_level_features=['eventWeight',
         # 'selection_category',
         'combined_category',
-        'MET']
+        'MET',
+        'mH']
     if target_channel == 'lvbb':
         event_level_features += [
             'mVH_lvbb',
@@ -128,18 +130,24 @@ def process_single_file(filepath, target_channel):
         met_sel = x_event[:,2] > 30e3
     else:
         met_sel = np.ones_like(x_event[:,2]).astype(bool)
-    removals = np.bincount(y[~(((channel_sel == 0) | (channel_sel == 3)) & met_sel & truth_sel), 1])
-    wts = x_event[channel_sel & met_sel & truth_sel,0]
-    mWH = x_event[channel_sel & met_sel & truth_sel,3]
-    x = x_event[channel_sel & met_sel & truth_sel,4:]
-    dsids = y[channel_sel & met_sel & truth_sel,0]
-    truth_labels = y[channel_sel & met_sel & truth_sel,1]
+    if MH_SEL:
+        mH_sel = (x_event[:,3] >= 95) & (x_event[:,3] <= 140)
+    else:
+        mH_sel = np.ones_like(x_event[:,3]).astype(bool)
+    combined_sel = channel_sel & met_sel & truth_sel & mH_sel
+    removals = np.bincount(y[~(combined_sel), 1])
+    wts = x_event[combined_sel,0]
+    mH = x_event[combined_sel,3]
+    mWH = x_event[combined_sel,4]
+    x = x_event[combined_sel,5:]
+    dsids = y[combined_sel,0]
+    truth_labels = y[combined_sel,1]
 
-    return x, truth_labels, wts, dsids, mWH, removals
+    return x, truth_labels, wts, dsids, mWH, mH, removals
 
-def combine_arrays_for_writing(x_chunk, y_chunk, weights_chunk, mWh_chunk, dsids_chunk):
+def combine_arrays_for_writing(x_chunk, y_chunk, weights_chunk, mWh_chunk, dsids_chunk, mHs_chunk):
     array_to_write=np.float32(np.concatenate(
-        [y_chunk.reshape(-1,1), weights_chunk.reshape(-1,1), mWh_chunk.reshape(-1,1), dsids_chunk.reshape(-1,1), x_chunk],
+        [y_chunk.reshape(-1,1), weights_chunk.reshape(-1,1), mWh_chunk.reshape(-1,1), dsids_chunk.reshape(-1,1), mHs_chunk.reshape(-1,1), x_chunk],
     axis=-1
     ))
     np.random.shuffle(array_to_write)
@@ -181,6 +189,7 @@ for dsid in dsid_set:
         ys=[]
         weights = []
         mWHs = []
+        mHs = []
         dsids = []
         current_chunk_size = 0
         total_events_written_for_sample = 0
@@ -195,7 +204,7 @@ for dsid in dsid_set:
             # print(path)
             # if path == '/data/atlas/HplusWh/20241128_ProcessedLightNtuples/user.rhulsken.mc16_13TeV.363355.She221_ZqqZvv.TOPQ1.e5525s3126r10201p4512.Nominal_v0_1l_out_root/user.rhulsken.31944615._000001.out.root':
             #     continue
-            x_chunk, y_chunk, weights_chunk, dsid_chunk, mWhs_chunk, removals_chunk = process_single_file(filepath=path, target_channel=channel)
+            x_chunk, y_chunk, weights_chunk, dsid_chunk, mWhs_chunk, mH_chunk, removals_chunk = process_single_file(filepath=path, target_channel=channel)
             means=np.load(f'/data/atlas/baines/tmp2_highLevel_MetCut/{channel}_mean.npy')
             stds=np.load(f'/data/atlas/baines/tmp2_highLevel_MetCut/{channel}_std.npy')
             # if x_chunk.shape[0]>500:
@@ -208,10 +217,11 @@ for dsid in dsid_set:
             ys.append(y_chunk)
             weights.append(weights_chunk)
             mWHs.append(mWhs_chunk)
+            mHs.append(mH_chunk)
             dsids.append(dsid_chunk)
             current_chunk_size += x_chunk.shape[0]
             if (current_chunk_size > MAX_CHUNK_SIZE) or (file_n+1 == len(all_files)):
-                array_chunk = combine_arrays_for_writing(x_chunk=np.concatenate(x_parts, axis=0), y_chunk=np.concatenate(ys, axis=0), weights_chunk=np.concatenate(weights, axis=0), mWh_chunk=np.concatenate(mWHs, axis=0), dsids_chunk=np.concatenate(dsids, axis=0))
+                array_chunk = combine_arrays_for_writing(x_chunk=np.concatenate(x_parts, axis=0), y_chunk=np.concatenate(ys, axis=0), weights_chunk=np.concatenate(weights, axis=0), mWh_chunk=np.concatenate(mWHs, axis=0), dsids_chunk=np.concatenate(dsids, axis=0), mHs_chunk=np.concatenate(mHs, axis=0))
                 # assert(False)
                 # assert(False)
                 if array_chunk.shape[0] > 0: # Check there's actually something in there
@@ -230,6 +240,7 @@ for dsid in dsid_set:
                 ys=[]
                 weights = []
                 mWHs = []
+                mHs = []
                 dsids = []
             # assert(False)
             for i in range(len(removals_chunk)):

@@ -11,7 +11,7 @@ from jaxtyping import Float
 import einops
 import matplotlib.pyplot as plt
 import matplotlib as mpl
-# mpl.use('Agg') # If you want to run in batch mode, and not see the plots made
+mpl.use('Agg') # If you want to run in batch mode, and not see the plots made
 from utils import decode_y_eval_to_info
 from mynewdataloaderHighLevel import ProportionalMemoryMappedDatasetHighLevel
 from transformer_lens import HookedTransformer, HookedTransformerConfig
@@ -52,6 +52,7 @@ def save_current_script(destination_directory):
 # Some choices about the training process
 # Assumes that the data has already been binarised
 MET_CUT_ON = True
+MH_SEL = False
 N_TARGETS = 2 # Number of target classes (needed for one-hot encoding)
 BIN_WRITE_TYPE=np.float32
 N_Real_Vars = 7 # x, y, z, energy, d0val, dzval.  BE CAREFUL because this might change and if it does you ahve to rebinarise
@@ -61,7 +62,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # Set up stuff to read in data from bin file
 
 batch_size = 64*32
-DATA_PATH='/data/atlas/baines/tmp2_highLevel' + '_MetCut'*MET_CUT_ON + '/'
+DATA_PATH='/data/atlas/baines/tmp3_highLevel' + '_MetCut'*MET_CUT_ON + '_mHSel'*MH_SEL + '/'
 memmap_paths = {}
 channel = 'qqbb'
 means = np.load(f'{DATA_PATH}{channel}_mean.npy')
@@ -85,7 +86,7 @@ train_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  device=device, 
                  is_train=True,
                  n_targets=N_TARGETS,
-                 train_split=0.5,
+                 train_split=0.75,
                  means=means,
                  stds=stds,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
@@ -99,7 +100,7 @@ val_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  device=device, 
                  is_train=False,
                  n_targets=N_TARGETS,
-                 train_split=0.95,
+                 train_split=0.25,
                  means=means,
                  stds=stds,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
@@ -171,7 +172,7 @@ class ConfigurableNN(nn.Module):
 # models[model_n] = {'model' : Net(model_cfg).to(device), 'inputs' : inputs}
 # models[model_n] = {'model' : MyHookedTransformer(model_cfg).to(device)}
 
-models[model_n] = {'model':ConfigurableNN(N_inputs=N_Real_Vars, N_targets=N_TARGETS, hidden_layers=[128, 128, 128], dropout_prob=0.05, use_batchnorm=False).to(device)}
+models[model_n] = {'model':ConfigurableNN(N_inputs=N_Real_Vars, N_targets=N_TARGETS, hidden_layers=[128, 128, 128], dropout_prob=0.00, use_batchnorm=False).to(device)}
 models[model_n]['model'].summary()
 
 # %%
@@ -190,16 +191,17 @@ def cosine_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int
     progress = cycle_epoch / n_epochs
     lr = lr_low + 0.5 * (lr_high - lr_low) * (1 + math.cos(math.pi * progress))
     return lr
-optimizer = torch.optim.Adam(models[model_n]['model'].parameters(), lr=1e-4, weight_decay=1e-5)
+# SHOULD CHANGE WEIGHT DECAY BACK (IT WAS 1e-5 before)
 num_epochs = 200
 
 # %%
 model, train_loader, val_loader = models[model_n]['model'], train_dataloader, val_dataloader
 log_interval = 20
+SAVE_MODEL_EVERY = int(num_epochs/3)
 config = {
         "learning_rate": 1e-4,
         "learning_rate_low": 1e-5,
-        "cosine_lr_n_epochs": int(num_epochs/2),   # Number of epochs to complete one cycle of learning rate
+        "cosine_lr_n_epochs": num_epochs,   # Number of epochs to complete one cycle of learning rate
         "architecture": "HighLevelNN",
         "dataset": "ATLAS_ChargedHiggs",
         "epochs": num_epochs,
@@ -207,16 +209,18 @@ config = {
         "wandb":True,
         # "wandb":False,
         "name":"_"+timeStr+"_HighLevel"+channel,
+        "weight_decay":1e-3,
     }
+optimizer = torch.optim.Adam(models[model_n]['model'].parameters(), lr=1e-4, weight_decay=config["weight_decay"])
 if config['wandb']:
     init_wandb(config)
     # wandb.watch(model, log_freq=100)
 
 criterion = HEPLoss()
-train_metrics = HEPMetrics(channel=channel, total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000], num_classes=N_TARGETS) # TODO should 'total_weights_per_dsid' here be abs or not-abs
-val_metrics = HEPMetrics(channel=channel, total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000], num_classes=N_TARGETS)
-train_metrics_MCWts = HEPMetrics(channel=channel, total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000], num_classes=N_TARGETS) # TODO should 'total_weights_per_dsid' here be abs or not-abs
-val_metrics_MCWts = HEPMetrics(channel=channel, total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000], num_classes=N_TARGETS)
+train_metrics = HEPMetrics(channel=channel, total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[1000, 5000], num_classes=N_TARGETS) # TODO should 'total_weights_per_dsid' here be abs or not-abs
+val_metrics = HEPMetrics(channel=channel, total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[1000, 5000], num_classes=N_TARGETS)
+train_metrics_MCWts = HEPMetrics(channel=channel, total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[1000, 5000], num_classes=N_TARGETS) # TODO should 'total_weights_per_dsid' here be abs or not-abs
+val_metrics_MCWts = HEPMetrics(channel=channel, total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[1000, 5000], num_classes=N_TARGETS)
 global_step = 0
 for epoch in range(num_epochs):
     # Update learning rate based on the cosine scheduler
@@ -237,7 +241,7 @@ for epoch in range(num_epochs):
         if (batch_idx >= orig_len_train_dataloader-5):
             continue
         batch = next(train_loader)
-        x, y, mWh, dsid, w, MC_w = batch.values()
+        x, y, mWh, dsid, w, MC_w, mH = batch.values()
         # batch['train_wts']
         # assert(False)
         # x, y, w, mWh, dsid = x.to(device), y.to(device), w.to(device), mWh.to(device), dsid.to(device)
@@ -253,8 +257,8 @@ for epoch in range(num_epochs):
         optimizer.step()
         
         # Update training metrics
-        train_metrics.update(outputs, y.argmax(dim=-1), w, mWh, dsid)
-        train_metrics_MCWts.update(outputs, y.argmax(dim=-1), MC_w, mWh, dsid)
+        train_metrics.update(outputs, y.argmax(dim=-1), w, mWh, dsid, mH)
+        train_metrics_MCWts.update(outputs, y.argmax(dim=-1), MC_w, mWh, dsid, mH)
         if (n_step % 10) == 0:
             print('[%d/%d][%d/%d]\tLoss_C: %.4e' %(epoch, num_epochs, n_step, orig_len_train_dataloader, loss.item()))
             # Log training metrics every log_interval batches
@@ -306,14 +310,14 @@ for epoch in range(num_epochs):
             if (batch_idx >= orig_len_val_dataloader-5):
                 continue
 
-            x, y, mWh, dsid, w, MC_w = batch.values()
+            x, y, mWh, dsid, w, MC_w, mH = batch.values()
             # x, y, w, mWh, dsid = x.to(device), y.to(device), w.to(device), mWh.to(device), dsid.to(device)
         
             outputs = model(x)
             loss += criterion(outputs, y, w, config['wandb'], mWh).sum()
             wt_sum += w.sum()
-            val_metrics.update(outputs, y.argmax(dim=-1), w, mWh, dsid)
-            val_metrics_MCWts.update(outputs, y.argmax(dim=-1), MC_w, mWh, dsid)
+            val_metrics.update(outputs, y.argmax(dim=-1), w, mWh, dsid, mH)
+            val_metrics_MCWts.update(outputs, y.argmax(dim=-1), MC_w, mWh, dsid, mH)
             # print('[%d/%d][%d/%d] Val' %(epoch, num_epochs, batch_idx, orig_len_val_dataloader))
         if config['wandb']:
             wandb.log({
@@ -376,10 +380,17 @@ for epoch in range(num_epochs):
                 for name, param in model.named_parameters():
                     if param.grad is not None:
                         wandb.log({"gradients/%s"%(name ): wandb.Histogram(param.detach().cpu().numpy())}, commit=False) # Log the gradients (values and edges) to WandB
+    if ((epoch % SAVE_MODEL_EVERY) == (SAVE_MODEL_EVERY-1)):
+        try:
+            modelSaveDir = "%s/models/%d/"%(saveDir, model_n)
+            os.makedirs(modelSaveDir, exist_ok=True)
+            torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d_%d" %(epoch, global_step) + '.pth')
+        except:
+            pass
 wandb.finish()
 
 # %%
 modelSaveDir = "%s/models/%d/"%(saveDir, model_n)
 os.makedirs(modelSaveDir, exist_ok=True)
-torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d" %(global_step) + '.pth')
+torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d_%d" %(epoch, global_step) + '.pth')
 # %%

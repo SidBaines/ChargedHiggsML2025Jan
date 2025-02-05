@@ -6,7 +6,7 @@ import numpy as np
 from sklearn.metrics import roc_curve
 
 class ByMassSignalSelectionMetrics:
-    def __init__(self, total_weights_per_dsid={}, signal_acceptance_levels=[100, 500, 5000], max_bkg_levels=[100, 200, 1000]):
+    def __init__(self, total_weights_per_dsid={}, signal_acceptance_levels=[100, 500, 5000], max_bkg_levels=[100, 200, 1000], mH_limits=[(0,1e10)]):#, mH_lower=95e3, mH_upper=140e3):
         """
         Args:
             signal_acceptance_levels: List of percentages (0-1) of signal events to accept
@@ -15,6 +15,7 @@ class ByMassSignalSelectionMetrics:
         self.total_weights_per_dsid = total_weights_per_dsid
         self.signal_levels = sorted(signal_acceptance_levels)
         self.max_bkg_levels = sorted(max_bkg_levels)
+        self.mH_limits = mH_limits
         self.reset()
         
     def reset(self):
@@ -23,9 +24,10 @@ class ByMassSignalSelectionMetrics:
         self.all_targets = []
         self.all_weights = []
         self.all_dsid = []  # to track dsid for each sample
+        self.all_mH = []  # to track dsid for each sample
         self.processed_weight_sums_per_dsid = {}  # to track weight sums per dsid
         
-    def update(self, preds, targets, weights, dsid):
+    def update(self, preds, targets, weights, dsid, mH):
         """
         Args:
             preds: Tensor of shape [batch_size, 3] with predicted probabilities
@@ -44,6 +46,7 @@ class ByMassSignalSelectionMetrics:
         self.all_targets.append(targets.cpu())
         self.all_weights.append(weights.cpu())
         self.all_dsid.append(dsid.cpu())
+        self.all_mH.append(mH.cpu())
 
         # Update weight sums per dsid
         unique_dsid = dsid.cpu().unique()
@@ -68,6 +71,7 @@ class ByMassSignalSelectionMetrics:
         targets = torch.cat(self.all_targets)
         weights = torch.cat(self.all_weights)
         dsids = torch.cat(self.all_dsid)
+        mHs = torch.cat(self.all_mH)
         
         # Separate signal and background
         bkg_mask = targets == 0
@@ -86,31 +90,34 @@ class ByMassSignalSelectionMetrics:
         DSID_MASS_MAPPING = {510115:0.8, 510116:0.9, 510117:1.0, 510118:1.2, 510119:1.4, 510120:1.6, 510121:1.8, 510122:2.0, 510123:2.5, 510124:3.0}
         MASS_DSID_MAPPING = {v: k for k, v in DSID_MASS_MAPPING.items()}  # Create inverse dictionary
         
-        for max_bkg_level in self.max_bkg_levels:
-            # Find the threshold for the maximum acceptable background
-            lvbb_bkg_thresh = self._find_bkg_threshold_for_signal(
-                p_bkg[bkg_mask], p_lvbb[bkg_mask], p_qqbb[bkg_mask],
-                weights[bkg_mask], dsids[bkg_mask], max_bkg_level
-            )
-            qqbb_bkg_thresh = self._find_bkg_threshold_for_signal(
-                p_bkg[bkg_mask], p_qqbb[bkg_mask], p_lvbb[bkg_mask],
-                weights[bkg_mask], dsids[bkg_mask], max_bkg_level
-            )
-            for signal_dsid in DSID_MASS_MAPPING.keys():
-                weight_scale_up_factor = self.total_weights_per_dsid[signal_dsid]/self.processed_weight_sums_per_dsid[signal_dsid]
-                # Apply selection logic
-                lvbb_selected = ((p_lvbb >= p_qqbb) & (p_bkg < lvbb_bkg_thresh))
-                qqbb_selected = ((p_qqbb >= p_lvbb) & (p_bkg < qqbb_bkg_thresh))
+        for (mH_lower, mH_upper) in self.mH_limits:
+            for max_bkg_level in self.max_bkg_levels:
+                # Find the threshold for the maximum acceptable background
+                lvbb_bkg_thresh = self._find_bkg_threshold_for_signal(
+                    p_bkg[bkg_mask], p_lvbb[bkg_mask], p_qqbb[bkg_mask],
+                    weights[bkg_mask], dsids[bkg_mask], mHs[bkg_mask], max_bkg_level,
+                    mH_lower=mH_lower, mH_upper=mH_upper
+                )
+                qqbb_bkg_thresh = self._find_bkg_threshold_for_signal(
+                    p_bkg[bkg_mask], p_qqbb[bkg_mask], p_lvbb[bkg_mask],
+                    weights[bkg_mask], dsids[bkg_mask], mHs[bkg_mask], max_bkg_level,
+                    mH_lower=mH_lower, mH_upper=mH_upper
+                )
+                for signal_dsid in DSID_MASS_MAPPING.keys():
+                    weight_scale_up_factor = self.total_weights_per_dsid[signal_dsid]/self.processed_weight_sums_per_dsid[signal_dsid]
+                    # Apply selection logic
+                    lvbb_selected = ((p_lvbb >= p_qqbb) & (p_bkg < lvbb_bkg_thresh) & ((mHs >= mH_lower) & (mHs <= mH_upper)))
+                    qqbb_selected = ((p_qqbb >= p_lvbb) & (p_bkg < qqbb_bkg_thresh) & ((mHs >= mH_lower) & (mHs <= mH_upper)))
 
-                results[(max_bkg_level, signal_dsid)] = {
-                    'lvbb_bkg_threshold': lvbb_bkg_thresh,
-                    'qqbb_bkg_threshold': qqbb_bkg_thresh,
-                    'sig_lvbb_expected': ((lvbb_selected & lvbb_mask & (dsids == signal_dsid)).float()*weights).sum()*weight_scale_up_factor,
-                    'sig_qqbb_expected': ((qqbb_selected & qqbb_mask & (dsids == signal_dsid)).float()*weights).sum()*weight_scale_up_factor,
-                }
+                    results[(max_bkg_level, signal_dsid, (mH_lower, mH_upper))] = {
+                        'lvbb_bkg_threshold': lvbb_bkg_thresh,
+                        'qqbb_bkg_threshold': qqbb_bkg_thresh,
+                        'sig_lvbb_expected': ((lvbb_selected & lvbb_mask & (dsids == signal_dsid)).float()*weights).sum()*weight_scale_up_factor,
+                        'sig_qqbb_expected': ((qqbb_selected & qqbb_mask & (dsids == signal_dsid)).float()*weights).sum()*weight_scale_up_factor,
+                    }
         return results
 
-    def _find_bkg_threshold_for_signal(self, p_bkg, p_sig, p_other_sig, weights, dsids, max_bkg_level):
+    def _find_bkg_threshold_for_signal(self, p_bkg, p_sig, p_other_sig, weights, dsids, mHs, max_bkg_level, mH_lower, mH_upper):
         """
         Find the background probability threshold that ensures the specified
         maximum fraction of background events is accepted for the signal.
@@ -126,13 +133,16 @@ class ByMassSignalSelectionMetrics:
             return 1.0  # No signal events
         
         # Apply mutual exclusivity rule
-        valid_mask = p_sig >= p_other_sig
+        valid_mask = (p_sig >= p_other_sig) & ((mHs >= mH_lower) & (mHs <= mH_upper))
         
         # Filter events that satisfy the mutual exclusivity rule
         p_bkg = p_bkg[valid_mask]
         p_sig = p_sig[valid_mask]
         weights = weights[valid_mask]
         dsids = dsids[valid_mask]
+
+        if len(p_sig) == 0:
+            return 1.0  # No signal events
         
         # Get the tensor of factors by which we have to scale up each event to be representative of the whole
         # dataset (since we will be calculating on some subset, with the proportions 'per-dsid' possibly different)
@@ -162,6 +172,7 @@ class ByMassSignalSelectionMetrics:
         
 
     def compute_background_for_fixed_sig_acceptance(self):
+        print("WARNING, this should be updated include mH limits")
         if not self.all_probs:
             return {}
             
@@ -170,6 +181,7 @@ class ByMassSignalSelectionMetrics:
         targets = torch.cat(self.all_targets)
         weights = torch.cat(self.all_weights)
         dsids = torch.cat(self.all_dsid)
+        mHs = torch.cat(self.all_mH)
         
         # Separate signal and background
         bkg_mask = targets == 0
@@ -696,14 +708,16 @@ class HEPMetrics:
                  mass_bins=50, 
                  mass_range=(0, 1000), 
                  signal_acceptance_levels=[100, 500, 5000],
+                 max_bkg_levels=[100, 200, 1000],
                  total_weights_per_dsid={},
+                 mHLimits=[(0,1e10),(95e3, 140e3)],
                  ):
         # Classification metrics
         self.accuracy = WeightedMulticlassAccuracy(num_classes=num_classes)
         self.auc = WeightedMulticlassAUC(num_classes=num_classes)
         self.confusion = WeightedConfusionMatrix(num_classes=num_classes)
         self.signal_selection = SignalSelectionMetrics(total_weights_per_dsid, signal_acceptance_levels)
-        self.by_mass_signal_selection = ByMassSignalSelectionMetrics(total_weights_per_dsid, signal_acceptance_levels)
+        self.by_mass_signal_selection = ByMassSignalSelectionMetrics(total_weights_per_dsid, signal_acceptance_levels, max_bkg_levels=max_bkg_levels, mH_limits=mHLimits)
         
         
         # Mass reconstruction histograms
@@ -717,14 +731,14 @@ class HEPMetrics:
         self.probs = []
         # self.targets = []
     
-    def update(self, preds, targets, weights, masses_qq, masses_lv, dsid):
+    def update(self, preds, targets, weights, masses_qq, masses_lv, dsid, mH):
         probs = F.softmax(preds, dim=1)
         self.accuracy.update(preds, targets, weights)
         # print("Accuracy calculated here: ", self.accuracy.compute())
         self.auc.update(preds, targets, weights)
         self.confusion.update(preds, targets, weights)
         self.signal_selection.update(preds, targets, weights, dsid)
-        self.by_mass_signal_selection.update(preds, targets, weights, dsid)
+        self.by_mass_signal_selection.update(preds, targets, weights, dsid, mH)
         
         # Store masses for correctly classified signals
         sig_mask = targets > 0
@@ -748,9 +762,9 @@ class HEPMetrics:
         if log_level > 0:
             self.signal_selection.reset()
         if log_level > 1:
-            pass
-        if log_level > 2:
             self.by_mass_signal_selection.reset()
+            # pass
+        if log_level > 2:
             self.confusion.reset()
             self.qqbb_mass = []
             self.lvbb_mass = []
@@ -779,8 +793,7 @@ class HEPMetrics:
                     f"{prefix}/{level}/bkg_qqbb_expected": values['bkg_qqbb_expected'],
                 })
         if log_level > 1:
-            pass
-        if log_level > 2:
+            # pass
             DSID_MASS_MAPPING = {510115:0.8, 510116:0.9, 510117:1.0, 510118:1.2, 510119:1.4, 510120:1.6, 510121:1.8, 510122:2.0, 510123:2.5, 510124:3.0}
             MASS_DSID_MAPPING = {v: k for k, v in DSID_MASS_MAPPING.items()} # Create inverse dictionary
             sig_bkg_metrics = self.by_mass_signal_selection.compute()
@@ -797,9 +810,10 @@ class HEPMetrics:
                 metrics.update({
                     # f"{prefix}_ByMassAcceptance_FixedBkg/lvbb_threshold/{level_dsid[0]}_{DSID_MASS_MAPPING[level_dsid[1]]}": values['lvbb_bkg_threshold'],
                     # f"{prefix}_ByMassAcceptance_FixedBkg/qqbb_threshold/{level_dsid[0]}_{DSID_MASS_MAPPING[level_dsid[1]]}": values['qqbb_bkg_threshold'],
-                    f"{prefix}_ByMassAcceptance_FixedBkg/sig_lvbb_expected/{level_dsid[0]}_{DSID_MASS_MAPPING[level_dsid[1]]}": values['sig_lvbb_expected'],
-                    f"{prefix}_ByMassAcceptance_FixedBkg/sig_qqbb_expected/{level_dsid[0]}_{DSID_MASS_MAPPING[level_dsid[1]]}": values['sig_qqbb_expected'],
+                    f"{prefix}_ByMassAcceptance_FixedBkg/sig_lvbb_expected/{level_dsid[0]}_{DSID_MASS_MAPPING[level_dsid[1]]}_mHlow{level_dsid[2][0]}_mHhigh{level_dsid[2][1]}": values['sig_lvbb_expected'],
+                    f"{prefix}_ByMassAcceptance_FixedBkg/sig_qqbb_expected/{level_dsid[0]}_{DSID_MASS_MAPPING[level_dsid[1]]}_mHlow{level_dsid[2][0]}_mHhigh{level_dsid[2][1]}": values['sig_qqbb_expected'],
                 })
+        if log_level > 2:
             # Confusion matrix plot
             conf_fig = self.confusion.plot(class_names=['Bkg', 'Lep', 'Had'])
             metrics[f"{prefix}/confusion_matrix"] = wandb.Image(conf_fig)
