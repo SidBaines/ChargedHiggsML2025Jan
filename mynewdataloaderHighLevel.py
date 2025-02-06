@@ -8,6 +8,7 @@ from math import ceil
 import einops
 import typing
 from math import floor
+from copy import copy
 
 class ProportionalMemoryMappedDatasetHighLevel:
     def __init__(self, 
@@ -210,7 +211,7 @@ class ProportionalMemoryMappedDatasetHighLevel:
         batch_samples = np.concatenate(batch_samples)
         # print(f"{batch_samples.shape=}")
         batch_weight_mult_factors = np.concatenate(batch_weight_mult_factors)
-        MC_Wts = batch_samples[:,1]
+        MC_Wts = batch_samples[:,1].copy()
         # print(batch_samples[:,1].sum())
         batch_samples[:,1] *= batch_weight_mult_factors
         # print(batch_samples[:,1].sum())
@@ -228,6 +229,7 @@ class ProportionalMemoryMappedDatasetHighLevel:
         
         # Now extract the training variables, labels, masses, etc.
         y = torch.nn.functional.one_hot(torch.Tensor(batch_samples[:,0]).to(torch.long), 3).to(torch.float)
+        # Convert from {0:bkg, 1:lvbb, 2:qqbb} to {0:bkg, 1:sig} since we only have one type of signal here
         if (y[:,1].sum().item() == 0):
             y = y[:,[0,2]]
         elif (y[:,2].sum().item() == 0):

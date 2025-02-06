@@ -792,6 +792,7 @@ class HEPMetrics:
             wandb.log({**metrics, "epoch": epoch, "step":step})
         else:
             print(metrics)
+        return metrics
 
 # Modified loss class with wandb logging
 class HEPLoss(torch.nn.Module):

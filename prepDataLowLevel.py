@@ -21,16 +21,20 @@ from utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtE
 
 # %% Some basic setup
 # Some choices about the  process
+TOSS_UNCERTAIN_TRUTH = True
+if not TOSS_UNCERTAIN_TRUTH:
+    raise NotImplementedError # Need to work out what to do (eg. put in a flag so they're not used as training?)
+USE_OLD_TRUTH_SETTING = False
 SHUFFLE_OBJECTS = False
 CONVERT_TO_PT_PHI_ETA_M = False
-MH_SEL = True
+MH_SEL = False
 MET_CUT_ON = True
 REQUIRE_XBB = True
 N_TARGETS = 3 # Number of target classes (needed for one-hot encoding)
 N_CTX = 7 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
 BIN_WRITE_TYPE=np.float32
 max_n_objs = 14 # BE CAREFUL because this might change and if it does you ahve to rebinarise
-OUTPUT_DIR = '/data/atlas/baines/tmp2_SingleXbbSelected_XbbTagged_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '/'
+OUTPUT_DIR = '/data/atlas/baines/tmp_SingleXbbSelected_XbbTagged_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 N_Real_Vars=4 # x, y, z, energy, d0val, dzval.  BE CAREFUL because this might change and if it does you ahve to rebinarise
 
@@ -64,7 +68,7 @@ class RunningStats:
         
         # Update count
         self.n += n_batch
-        if n_batch > 0:    
+        if n_batch > 0:
             # Update mean
             delta = x - self.mean
             delta = delta * np.expand_dims((x[:,:,0]!=N_CTX-1).astype(float), axis=-1) # Only get the ones that actually have particles
@@ -91,6 +95,10 @@ running_stats = RunningStats(N_Real_Vars+1)
 # %%
 # Main function to actually process a single file and return the arrays
 def process_single_file(filepath, max_n_objs, shuffle_objs):
+    if USE_OLD_TRUTH_SETTING:
+        truth_var = 'truth_W_decay_mode'
+    else:
+        truth_var = 'll_truth_decay_mode'
     x_part, x_event, y = read_file(filepath, 
                                 particle_features=[
                                     #  'part_pt', 'part_eta', 'part_phi', 'part_energy', 'type',
@@ -109,7 +117,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
                                     'll_best_mWH_lvbb',
                                     'll_best_mH',
                                 ],
-                                labels=['DSID', 'll_truth_decay_mode'],
+                                labels=['DSID', truth_var],
                                 new_inputs_labels=True
     )
     type_part = x_part[:,N_Real_Vars,:]
@@ -206,12 +214,16 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     if MET_CUT_ON:
         low_MET = met < 30e3 # 30GeV Minimum for MET
     else:
-        low_MET = np.ones_like(no_ljet).astype(bool)
+        low_MET = np.zeros_like(no_ljet)#.astype(bool)
     if MH_SEL:
         mH_cut = (mH < 95e3) | (mH > 140e3)
     else:
-        mH_cut = np.ones_like(no_ljet).astype(bool)
-    combined_removal = (no_ljet | selection_removals | low_MET | mH_cut)
+        mH_cut = np.zeros_like(no_ljet)#.astype(bool)
+    if TOSS_UNCERTAIN_TRUTH:
+        uncertain_cut = ((np.searchsorted(types_set, y[:, 1])==0) & is_sig)
+    else:
+        uncertain_cut = np.zeros_like(no_ljet)#.astype(bool)
+    combined_removal = (no_ljet | selection_removals | low_MET | mH_cut | uncertain_cut)
     removals = {0: (combined_removal & (~is_sig)).sum(),
                 1: (combined_removal & is_sig).sum()}
     x_part = x_part[~combined_removal]
@@ -277,7 +289,7 @@ def combine_arrays_for_writing(x_chunk, y_chunk, dsid_chunk, weights_chunk, mWh_
         ],
     axis=-2
     ))
-    np.random.shuffle(array_to_write)
+    # np.random.shuffle(array_to_write)
     return array_to_write
 
 
@@ -289,8 +301,10 @@ MAX_CHUNK_SIZE = 100000
 # MAX_PER_DSID = {dsid : 10000000 for dsid in dsid_set}
 # MAX_PER_DSID[410470] = 100
 for dsid in dsid_set:
-    # if dsid != 363489:
     # if dsid <= 700340:
+    # if dsid != 510121:
+    #     continue
+    # if '510' in str(dsid):
     #     continue
 # for dsid in [510120]:
     # if ((500000<dsid) and (600000>dsid)) or (dsid==410470):

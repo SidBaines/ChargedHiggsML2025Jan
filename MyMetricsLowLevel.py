@@ -104,7 +104,10 @@ class ByMassSignalSelectionMetrics:
                     mH_lower=mH_lower, mH_upper=mH_upper
                 )
                 for signal_dsid in DSID_MASS_MAPPING.keys():
-                    weight_scale_up_factor = self.total_weights_per_dsid[signal_dsid]/self.processed_weight_sums_per_dsid[signal_dsid]
+                    if signal_dsid in self.processed_weight_sums_per_dsid.keys():
+                        weight_scale_up_factor = self.total_weights_per_dsid[signal_dsid]/self.processed_weight_sums_per_dsid[signal_dsid]
+                    else:
+                        weight_scale_up_factor = 0
                     # Apply selection logic
                     lvbb_selected = ((p_lvbb >= p_qqbb) & (p_bkg < lvbb_bkg_thresh) & ((mHs >= mH_lower) & (mHs <= mH_upper)))
                     qqbb_selected = ((p_qqbb >= p_lvbb) & (p_bkg < qqbb_bkg_thresh) & ((mHs >= mH_lower) & (mHs <= mH_upper)))
@@ -866,6 +869,7 @@ class HEPMetrics:
             wandb.log({**metrics, "epoch": epoch, "step":step})
         else:
             print(metrics)
+        return metrics
 
 # Modified loss class with wandb logging
 class HEPLoss(torch.nn.Module):

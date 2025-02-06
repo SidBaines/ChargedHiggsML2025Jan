@@ -9,6 +9,7 @@ import einops
 import typing
 from math import floor
 from sklearn.utils import shuffle
+from copy import copy
 
 
 dsid_set = np.array([363355,363356,363357,363358,363359,363360,363489,407342,407343,407344,
@@ -54,6 +55,7 @@ class ProportionalMemoryMappedDataset:
                  train_split: float = 0.8,
                  n_targets: int = 3,
                  shuffle: bool = False, # Whether or not to shuffle along the object dimension,
+                 shuffle_batch: bool = True, # Whether or not to shuffle along the batch dimension,
                  signal_reweights: typing.Optional[np.array]=None,
                  means=None,
                  stds=None,
@@ -75,6 +77,7 @@ class ProportionalMemoryMappedDataset:
         self.device = device
         self.n_targets = n_targets
         self.shuffle_objects = shuffle
+        self.shuffle_batch = shuffle_batch
         self.signal_reweights = signal_reweights
 
         # Add train/val splitting logic
@@ -163,9 +166,14 @@ class ProportionalMemoryMappedDataset:
                 self.current_indices[dsid] = list(range(floor((1-self.train_split)*self.sample_counts[dsid]), self.sample_counts[dsid]))
             else:
                 self.current_indices[dsid] = list(range(floor((1-self.train_split)*self.sample_counts[dsid])))
-
-            random.shuffle(self.current_indices[dsid])
-            
+            if self.shuffle_batch:
+                random.shuffle(self.current_indices[dsid])
+    
+    def get_total_samples(self):
+        if self.is_train:
+            return sum([len(self.memmaps[dsid]) for dsid in self.memmaps.keys()]) * (self.train_split)
+        else:
+            return sum([len(self.memmaps[dsid]) for dsid in self.memmaps.keys()]) * (1-self.train_split)
     
     def __iter__(self):
         return self
@@ -245,7 +253,7 @@ class ProportionalMemoryMappedDataset:
         batch_samples = np.concatenate(batch_samples)
         # print(f"{batch_samples.shape=}")
         batch_weight_mult_factors = np.concatenate(batch_weight_mult_factors)
-        MC_Wts = batch_samples[:,1,0]
+        MC_Wts = batch_samples[:,1,0].copy()
         batch_samples[:,1,0] *= batch_weight_mult_factors
         
         # Shuffle batch

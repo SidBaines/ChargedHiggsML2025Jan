@@ -22,12 +22,17 @@ import matplotlib.pyplot as plt
 
 # %% Some basic setup
 # Some choices about the  process
+TOSS_UNCERTAIN_TRUTH = True
+if not TOSS_UNCERTAIN_TRUTH:
+    raise NotImplementedError # Need to work out what to do (eg. put in a flag so they're not used as training?)
+USE_OLD_TRUTH_SETTING = False
 MET_CUT_ON = True
 MH_SEL = False
 REQUIRE_XBB = True
 BIN_WRITE_TYPE=np.float32
-OUTPUT_DIR = '/data/atlas/baines/tmp3_highLevel' + '_MetCut'*MET_CUT_ON + '_mHSel'*MH_SEL + '/'
+OUTPUT_DIR = '/data/atlas/baines/tmp3_highLevel' + '_MetCut'*MET_CUT_ON + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+types_set = np.array([-2, 1, 2])  # Try not to change this often - have to re-binarise if we do!
 
 # Create a mapping from the dsid/decay-type pair to integers, for the purposes of binarising data.
 dsid_set = np.array([363355,363356,363357,363358,363359,363360,363489,407342,407343,407344,
@@ -83,6 +88,10 @@ running_stats = {
 # Main function to actually process a single file and return the arrays
 def process_single_file(filepath, target_channel):
     assert((target_channel == 'lvbb') or (target_channel == 'qqbb'))
+    if USE_OLD_TRUTH_SETTING:
+        truth_var = 'truth_W_decay_mode'
+    else:
+        truth_var = 'll_truth_decay_mode'
     event_level_features=['eventWeight',
         # 'selection_category',
         'combined_category',
@@ -104,7 +113,7 @@ def process_single_file(filepath, target_channel):
     _, x_event, y = read_file(filepath, 
                                 particle_features=[],
                                 event_level_features=event_level_features,
-                                labels=['DSID', 'truth_W_decay_mode'],
+                                labels=['DSID', truth_var],
                                 new_inputs_labels=True
     )
     if len(y):
@@ -126,6 +135,7 @@ def process_single_file(filepath, target_channel):
         elif target_channel =='qqbb':
             channel_sel = (x_event[:,1] == 3)
             truth_sel = (y[:,1]==2) if ((dsid>500000) and (dsid<600000)) else np.ones_like(y[:,1]).astype(bool)
+    is_sig = ((y[:,0] > 500000) & (y[:,0] < 600000))
     if MET_CUT_ON:
         met_sel = x_event[:,2] > 30e3
     else:
@@ -134,14 +144,18 @@ def process_single_file(filepath, target_channel):
         mH_sel = (x_event[:,3] >= 95) & (x_event[:,3] <= 140)
     else:
         mH_sel = np.ones_like(x_event[:,3]).astype(bool)
-    combined_sel = channel_sel & met_sel & truth_sel & mH_sel
-    removals = np.bincount(y[~(combined_sel), 1])
+    if TOSS_UNCERTAIN_TRUTH:
+        uncertain_cut = ~((np.searchsorted(types_set, y[:, 1])==0) & is_sig)
+    else:
+        uncertain_cut = np.ones_like(is_sig)#.astype(bool)
+    combined_sel = channel_sel & met_sel & truth_sel & mH_sel & uncertain_cut
+    removals = np.bincount(is_sig[~(combined_sel)])
     wts = x_event[combined_sel,0]
     mH = x_event[combined_sel,3]
     mWH = x_event[combined_sel,4]
     x = x_event[combined_sel,5:]
     dsids = y[combined_sel,0]
-    truth_labels = y[combined_sel,1]
+    truth_labels = np.searchsorted(types_set, y[combined_sel, 1])
 
     return x, truth_labels, wts, dsids, mWH, mH, removals
 
@@ -166,7 +180,7 @@ MAX_CHUNK_SIZE = 100000
 for dsid in dsid_set:
     for channel in ['lvbb', 'qqbb']:
         # if dsid != 510124:
-        # if dsid >= 400000:
+        # # if dsid >= 400000:
         #     continue
         if True:
             pass
