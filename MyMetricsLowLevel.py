@@ -17,7 +17,7 @@ def init_wandb(config):
     wandb.define_metric("val/*", step_metric="epoch")
 
 
-class HEPMetrics2:
+class HEPMetrics:
     def __init__(self, 
                  num_classes=3, 
                  max_buffer_len=100000,
@@ -212,8 +212,6 @@ class HEPMetrics2:
             # Compute AUC using trapezoidal rule
             auc = np.trapz(tpr, fpr).item()
             auc_scores[self.class_labels[class_idx]] = auc
-        if not auc_scores:
-            return 0.0
         return auc_scores
     
     def compute_signal_selection_metrics(self):
@@ -311,14 +309,15 @@ print(cum_weights3[np.searchsorted(cum_weights3, max_bkg_level)])
 
 # Modified loss class with wandb logging
 class HEPLoss(torch.nn.Module):
-    def __init__(self, alpha=0.1, target_mass=125):
+    def __init__(self, weight_by_mH=False, alpha=0.1, target_mass=125):
         super().__init__()
         self.ce = torch.nn.CrossEntropyLoss(reduction='none')
+        self.weight_by_mH = weight_by_mH
         self.alpha = alpha
         self.target_mass = target_mass
         
     def forward(self, inputs, targets, weights, log, masses_qq, masses_lv, mHs):
-        if 1:
+        if self.weight_by_mH:
             weights *= self.scale_loss_by_mH(mHs)
         ce_loss = self.ce(inputs, targets) * weights
         

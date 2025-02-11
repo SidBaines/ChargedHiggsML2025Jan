@@ -131,7 +131,13 @@ class ProportionalMemoryMappedDatasetHighLevel:
                 self.current_indices[dsid] = list(range(floor((1-self.train_split)*self.sample_counts[dsid])))
             if self.shuffle_batch:
                 random.shuffle(self.current_indices[dsid])
-            
+    
+    def get_total_samples(self):
+        if self.is_train:
+            return sum([len(self.memmaps[dsid]) for dsid in self.memmaps.keys()]) * (self.train_split)
+        else:
+            return sum([len(self.memmaps[dsid]) for dsid in self.memmaps.keys()]) * (1-self.train_split)
+    
     
     def __iter__(self):
         return self
@@ -144,6 +150,8 @@ class ProportionalMemoryMappedDatasetHighLevel:
         - Batch of samples
         - Corresponding labels (DSIDs)
         """
+        # print("NEED TO CHECK YIELDS OF LVBB/QQBB AND COMPARE THE DATASET WRITING/READING TO THE LOW-LEVEL ONE BECAUSE THIS DOESN'T SEEM TO MATCH AT THE MOMENT")
+        # assert(False)
         batch_samples = []
         batch_weight_mult_factors = []
         

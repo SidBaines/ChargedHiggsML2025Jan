@@ -24,7 +24,9 @@ from utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtE
 TOSS_UNCERTAIN_TRUTH = True
 if not TOSS_UNCERTAIN_TRUTH:
     raise NotImplementedError # Need to work out what to do (eg. put in a flag so they're not used as training?)
-USE_OLD_TRUTH_SETTING = False
+USE_OLD_TRUTH_SETTING = True
+if USE_OLD_TRUTH_SETTING:
+    raise NotImplementedError # Need to check if we should require truth_agreement variable here or not
 SHUFFLE_OBJECTS = False
 CONVERT_TO_PT_PHI_ETA_M = False
 MH_SEL = False
@@ -35,6 +37,7 @@ N_CTX = 7 # the five types of object, plus one for 'no object;. We need to hardc
 BIN_WRITE_TYPE=np.float32
 max_n_objs = 14 # BE CAREFUL because this might change and if it does you ahve to rebinarise
 OUTPUT_DIR = '/data/atlas/baines/tmp_SingleXbbSelected_XbbTagged_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
+# OUTPUT_DIR = './tmp/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 N_Real_Vars=4 # x, y, z, energy, d0val, dzval.  BE CAREFUL because this might change and if it does you ahve to rebinarise
 
@@ -97,8 +100,10 @@ running_stats = RunningStats(N_Real_Vars+1)
 def process_single_file(filepath, max_n_objs, shuffle_objs):
     if USE_OLD_TRUTH_SETTING:
         truth_var = 'truth_W_decay_mode'
+        mH_var = 'mH'
     else:
         truth_var = 'll_truth_decay_mode'
+        mH_var = 'll_best_mH'
     x_part, x_event, y = read_file(filepath, 
                                 particle_features=[
                                     #  'part_pt', 'part_eta', 'part_phi', 'part_energy', 'type',
@@ -115,7 +120,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
                                     'MET',
                                     'll_best_mWH_qqbb',
                                     'll_best_mWH_lvbb',
-                                    'll_best_mH',
+                                    mH_var,
                                 ],
                                 labels=['DSID', truth_var],
                                 new_inputs_labels=True
@@ -201,6 +206,8 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     mWh_qqbb = x_event[:,3]
     mWh_lvbb = x_event[:,4]
     mH = x_event[:,5]
+    if USE_OLD_TRUTH_SETTING:
+        mH = mH*1e3
     if MET_CUT_ON:
         met = x_event[:,2]
 
@@ -220,7 +227,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     else:
         mH_cut = np.zeros_like(no_ljet)#.astype(bool)
     if TOSS_UNCERTAIN_TRUTH:
-        uncertain_cut = ((np.searchsorted(types_set, y[:, 1])==0) & is_sig)
+        uncertain_cut = (((y[:, 1] != 1) & (y[:, 1] != 2)) & is_sig)
     else:
         uncertain_cut = np.zeros_like(no_ljet)#.astype(bool)
     combined_removal = (no_ljet | selection_removals | low_MET | mH_cut | uncertain_cut)
@@ -238,7 +245,8 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     # HERE Need to write some code to store this properly
     # dsid = np.searchsorted(dsid_set, y[:, 0])
     dsid = y[:, 0]
-    y = np.searchsorted(types_set, y[:, 1])
+    truth_label = (y[:, 1] == 1)*1 + (y[:, 1] == 2)*2
+    # truth_label = np.searchsorted(types_set, y[:, 1])
 
     # Reshape the x array to how we want to read it in later
     x_part = einops.rearrange(x_part, 'batch d_input object -> batch object d_input')
@@ -265,9 +273,9 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
                     permuted_indices = np.random.permutation(max_n_objs)
                     # Shuffle the non-zero elements along the object dimension
                     result[i,:max_n_objs] = result[i, permuted_indices]
-        return result[:,:max_n_objs,:N_Real_Vars+1], y, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH
+        return result[:,:max_n_objs,:N_Real_Vars+1], truth_label, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH
     else:
-        return x_part[:,:max_n_objs,:N_Real_Vars+1], y, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH
+        return x_part[:,:max_n_objs,:N_Real_Vars+1], truth_label, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH
 
 def combine_arrays_for_writing(x_chunk, y_chunk, dsid_chunk, weights_chunk, mWh_qqbbs_chunk, mWh_lvbbs_chunk, mH_chunk):
     # print(type(y_chunk))
@@ -302,7 +310,8 @@ MAX_CHUNK_SIZE = 100000
 # MAX_PER_DSID[410470] = 100
 for dsid in dsid_set:
     # if dsid <= 700340:
-    # if dsid != 510121:
+    # if dsid != 510124:
+    # if dsid != 410470:
     #     continue
     # if '510' in str(dsid):
     #     continue

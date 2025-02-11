@@ -25,7 +25,9 @@ import matplotlib.pyplot as plt
 TOSS_UNCERTAIN_TRUTH = True
 if not TOSS_UNCERTAIN_TRUTH:
     raise NotImplementedError # Need to work out what to do (eg. put in a flag so they're not used as training?)
-USE_OLD_TRUTH_SETTING = False
+USE_OLD_TRUTH_SETTING = True
+# if USE_OLD_TRUTH_SETTING:
+#     raise NotImplementedError # Need to check if we should require truth_agreement variable here or not
 MET_CUT_ON = True
 MH_SEL = False
 REQUIRE_XBB = True
@@ -90,13 +92,15 @@ def process_single_file(filepath, target_channel):
     assert((target_channel == 'lvbb') or (target_channel == 'qqbb'))
     if USE_OLD_TRUTH_SETTING:
         truth_var = 'truth_W_decay_mode'
+        mH_var = 'mH'
     else:
         truth_var = 'll_truth_decay_mode'
+        mH_var = 'll_best_mH'
     event_level_features=['eventWeight',
         # 'selection_category',
         'combined_category',
         'MET',
-        'mH']
+        mH_var]
     if target_channel == 'lvbb':
         event_level_features += [
             'mVH_lvbb',
@@ -145,17 +149,21 @@ def process_single_file(filepath, target_channel):
     else:
         mH_sel = np.ones_like(x_event[:,3]).astype(bool)
     if TOSS_UNCERTAIN_TRUTH:
-        uncertain_cut = ~((np.searchsorted(types_set, y[:, 1])==0) & is_sig)
+        # uncertain_sel = ~((np.searchsorted(types_set, y[:, 1])==0) & is_sig)
+        uncertain_sel = ~(((y[:, 1] != 1) & (y[:, 1] != 2)) & is_sig)
     else:
-        uncertain_cut = np.ones_like(is_sig)#.astype(bool)
-    combined_sel = channel_sel & met_sel & truth_sel & mH_sel & uncertain_cut
+        uncertain_sel = np.ones_like(is_sig)#.astype(bool)
+    combined_sel = channel_sel & met_sel & truth_sel & mH_sel & uncertain_sel
     removals = np.bincount(is_sig[~(combined_sel)])
     wts = x_event[combined_sel,0]
     mH = x_event[combined_sel,3]
+    if USE_OLD_TRUTH_SETTING:
+        mH = mH*1e3
     mWH = x_event[combined_sel,4]
     x = x_event[combined_sel,5:]
     dsids = y[combined_sel,0]
-    truth_labels = np.searchsorted(types_set, y[combined_sel, 1])
+    # truth_labels = np.searchsorted(types_set, y[combined_sel, 1])
+    truth_labels = (y[combined_sel, 1] == 1)*1 + (y[combined_sel, 1] == 2)*2
 
     return x, truth_labels, wts, dsids, mWH, mH, removals
 
@@ -179,8 +187,8 @@ MAX_CHUNK_SIZE = 100000
 
 for dsid in dsid_set:
     for channel in ['lvbb', 'qqbb']:
-        # if dsid != 510124:
         # # if dsid >= 400000:
+        # if dsid != 510115:
         #     continue
         if True:
             pass

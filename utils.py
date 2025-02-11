@@ -1,4 +1,32 @@
 import numpy as np
+import torch
+
+# %%
+
+def weighted_correlation(x, y, w):
+    # Ensure that the tensors are 1D and have the same length
+    assert x.ndimension() == 1 and y.ndimension() == 1 and w.ndimension() == 1, "All inputs must be 1D tensors"
+    assert len(x) == len(y) == len(w), "x, y, and w must have the same length"
+    
+    # Normalize the weights
+    w_sum = torch.sum(w)
+    
+    # Compute weighted means
+    weighted_mean_x = torch.sum(x * w) / w_sum
+    weighted_mean_y = torch.sum(y * w) / w_sum
+    
+    # Compute weighted covariance
+    weighted_cov_xy = torch.sum(w * (x - weighted_mean_x) * (y - weighted_mean_y)) / w_sum
+    
+    # Compute weighted variances
+    weighted_var_x = torch.sum(w * (x - weighted_mean_x)**2) / w_sum
+    weighted_var_y = torch.sum(w * (y - weighted_mean_y)**2) / w_sum
+    
+    # Compute weighted correlation
+    correlation = weighted_cov_xy / (torch.sqrt(weighted_var_x * weighted_var_y))
+    
+    return correlation
+
 
 # %%
 # Define useful transforms for when we're reading the data in
