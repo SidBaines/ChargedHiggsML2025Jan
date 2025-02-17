@@ -8,6 +8,7 @@ import os
 import torch
 from datetime import datetime
 from jaxtyping import Float
+from typing import List
 import einops
 import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -30,6 +31,7 @@ from sklearn.metrics import roc_auc_score
 import shutil
 # from MyMetricsLowLevel import HEPMetrics, HEPLoss, init_wandb
 from MyMetricsLowLevel import HEPMetrics, HEPLoss, init_wandb
+import functools
 
 # %%
 timeStr = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -59,15 +61,17 @@ if not TOSS_UNCERTAIN_TRUTH:
 USE_OLD_TRUTH_SETTING = True
 # if USE_OLD_TRUTH_SETTING:
 #     raise NotImplementedError # Need to check if we should require truth_agreement variable here (well, really in the prep data script) or not
-SHUFFLE_OBJECTS = True
+SHUFFLE_OBJECTS = False
 NORMALISE_DATA = False
 CONVERT_TO_PT_PHI_ETA_M = False
 MET_CUT_ON = True
 MH_SEL = False
 N_TARGETS = 3 # Number of target classes (needed for one-hot encoding)
 N_CTX = 7 # the six types of object, plus one for 'no object;. We need to hardcode this unfortunately
+USE_DROPOUT = True
 BIN_WRITE_TYPE=np.float32
-max_n_objs = 14 # BE CAREFUL because this might change and if it does you ahve to rebinarise
+max_n_objs_in_file = 14 # BE CAREFUL because this might change and if it does you ahve to rebinarise
+max_n_objs_to_read = 14
 N_Real_Vars = 4 # x, y, z, energy, d0val, dzval.  BE CAREFUL because this might change and if it does you ahve to rebinarise
 types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 'ljetXbbTagged'}
 
@@ -75,8 +79,10 @@ types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 
 # Set up stuff to read in data from bin file
 
 batch_size = 64*8
-DATA_PATH=f'/data/atlas/baines/tmp2_SingleXbbSelected_XbbTagged_WithRecoMasses_{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired' + '_mHSel'*MH_SEL + '/'
-DATA_PATH=f'/data/atlas/baines/tmp_SingleXbbSelected_XbbTagged_WithRecoMasses_{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired' + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
+batch_size = 64*8*16
+batch_size = 128
+DATA_PATH=f'/data/atlas/baines/tmp2_SingleXbbSelected_XbbTagged_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired' + '_mHSel'*MH_SEL + '/'
+DATA_PATH=f'/data/atlas/baines/tmp_SingleXbbSelected_XbbTagged_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired' + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
 if NORMALISE_DATA:
     means = np.load(f'{DATA_PATH}mean.npy')[1:]
     stds = np.load(f'{DATA_PATH}std.npy')[1:]
@@ -89,10 +95,9 @@ for file_name in os.listdir(DATA_PATH):
         continue
     dsid = file_name[5:11]
     memmap_paths[int(dsid)] = DATA_PATH+file_name
-train_split=0.5
 train_dataloader = ProportionalMemoryMappedDataset(
                  memmap_paths = memmap_paths,  # DSID to memmap path
-                 max_n_objs=max_n_objs,
+                 max_objs_in_memmap=max_n_objs_in_file,
                  N_Real_Vars=N_Real_Vars,
                  class_proportions = None,
                  batch_size=batch_size,
@@ -100,25 +105,28 @@ train_dataloader = ProportionalMemoryMappedDataset(
                  is_train=True,
                  n_targets=N_TARGETS,
                  shuffle=SHUFFLE_OBJECTS,
-                 train_split=train_split,
+                 train_split=0.3,
                  means=means,
                  stds=stds,
+                 objs_to_output=max_n_objs_to_read,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
 val_dataloader = ProportionalMemoryMappedDataset(
                  memmap_paths = memmap_paths,  # DSID to memmap path
-                 max_n_objs=max_n_objs,
+                 max_objs_in_memmap=max_n_objs_in_file,
                  N_Real_Vars=N_Real_Vars,
                  class_proportions = None,
-                 batch_size=batch_size,
+                #  batch_size=64*8*64*8,
+                 batch_size=64*8*64,
                  device=device, 
                  is_train=False,
                  n_targets=N_TARGETS,
                  shuffle=SHUFFLE_OBJECTS,
-                 train_split=train_split,
+                 train_split=0.8,
                  means=means,
                  stds=stds,
+                 objs_to_output=max_n_objs_to_read,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
@@ -176,14 +184,14 @@ model_n = 0
 model_cfg = HookedTransformerConfig(
     # normalization_type='LN',
     normalization_type='LN',
-    d_model=16,
+    d_model=20,
     d_head=8,
-    n_layers=8,
-    n_heads=8,
+    n_layers=4,
+    n_heads=4,
     n_ctx=N_CTX, # Max number of types of object per event + 1 because we want a dummy row in the embedding matrix for non-existing particles
     d_vocab=N_Real_Vars, # Number of inputs per object
     d_vocab_out=N_TARGETS,  # 2 because we're doing binary classification
-    d_mlp=64,
+    d_mlp=100,
     attention_dir="bidirectional",  # defaults to "causal"
     act_fn="relu",
     use_attn_result=True,
@@ -222,6 +230,16 @@ def add_perma_hooks_to_mask_pad_tokens(
 
     return model
 
+def dropout_hook(
+    resid: Float[Tensor, "batch object d_model"],
+    hook: HookPoint,
+    p=0.1,
+    v=-1e5,
+) -> None:
+    resid.masked_fill_((torch.rand(resid.shape) < p).to(resid.device), v)
+
+    
+
 
 models[model_n]['model'].reset_hooks(including_permanent=True)
 models[model_n]['model'] = add_perma_hooks_to_mask_pad_tokens(models[model_n]['model'])
@@ -239,9 +257,30 @@ def cosine_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int
     that oscillates between `lr_high` and `lr_low` every `n_epochs`.
     """
     # Cosine annealing function
-    cycle_epoch = epoch % n_epochs
-    progress = cycle_epoch / n_epochs
-    lr = lr_low + 0.5 * (lr_high - lr_low) * (1 + math.cos(math.pi * progress))
+    if epoch<n_epochs:
+        cycle_epoch = epoch % n_epochs
+        progress = cycle_epoch / n_epochs
+        lr = lr_low + 0.5 * (lr_high - lr_low) * (1 + math.cos(math.pi * progress))
+    else:
+        lr = lr_low
+    return lr
+
+def multi_cosine_lr_scheduler(epoch: int, lrs:List[float], n_epochs: int):
+    """
+    This function calculates the learning rate following a cosine schedule
+    flattens every (n_epochs)/len(lrs) epochs, at each element of lrs
+    """
+    # Cosine annealing function
+    num_epochs_per_chunk = int(n_epochs/(len(lrs)-1))
+    chunk = epoch // num_epochs_per_chunk
+    if chunk<len(lrs)-1:
+        lr_high = lrs[chunk]
+        lr_low = lrs[chunk+1]
+        cycle_epoch = epoch % num_epochs_per_chunk
+        progress = cycle_epoch / num_epochs_per_chunk
+        lr = lr_low + 0.5 * (lr_high - lr_low) * (1 + math.cos(math.pi * progress))
+    else:
+        lr = lrs[-1]
     return lr
 
 
@@ -269,22 +308,21 @@ def cosine_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int
 
 # %%
 model, train_loader, val_loader = models[model_n]['model'], train_dataloader, val_dataloader
-num_epochs = 300
-log_interval = 100
+num_epochs = 150
+# log_interval = 100
+log_interval = int(50e3/batch_size)
 # longer_log_interval = log_interval*10
 longer_log_interval = 100000000000
-SAVE_MODEL_EVERY = 30
+SAVE_MODEL_EVERY = 50
 config = {
-        "learning_rate": 5e-5,
-        "learning_rate_low": 1e-5,
-        "cosine_lr_n_epochs": num_epochs,   # Number of epochs to complete one cycle of learning rate
+        "learning_rates": [5e-4, 1e-5, 1e-6],
         "architecture": "PhysicsTransformer",
         "dataset": "ATLAS_ChargedHiggs",
         "epochs": num_epochs,
         "batch_size": batch_size,
         "wandb":True,
         "name":"_"+timeStr+"_LowLevel",
-        "weight_decay":1e-4,
+        "weight_decay":1e-6,
     }
 optimizer = torch.optim.Adam(models[model_n]['model'].parameters(), lr=1e-4, weight_decay=config['weight_decay'])
 if config['wandb']:
@@ -309,9 +347,10 @@ val_metrics = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(val_datal
 train_metrics_MCWts = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
 val_metrics_MCWts = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000])
 global_step = 0
+total_train_samples_processed = 0
 for epoch in range(num_epochs):
     # Update learning rate based on the cosine scheduler
-    new_lr = cosine_lr_scheduler(epoch, config['learning_rate'], config['learning_rate_low'], config['cosine_lr_n_epochs'])
+    new_lr = multi_cosine_lr_scheduler(epoch, config['learning_rates'], num_epochs)
     for param_group in optimizer.param_groups:
         param_group['lr'] = new_lr
     print(f"Epoch {epoch + 1}/{num_epochs}, Learning Rate: {new_lr:.6e}")
@@ -330,37 +369,49 @@ for epoch in range(num_epochs):
     for batch_idx in range(orig_len_train_dataloader):
         n_step+=1
         global_step += 1
-        if (batch_idx >= orig_len_train_dataloader-5):
-            continue
+        # if (batch_idx >= orig_len_train_dataloader-5):
+        #     continue
         batch = next(train_loader)
         x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
         # x, y, w, types, mqq, mlv, MCWts, mH = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device), MCWts.to(device)
         
         optimizer.zero_grad()
-        outputs = model(x, types)
+        if USE_DROPOUT:
+            temp_hook_fn_attn = functools.partial(dropout_hook, p=0.2, v=0)
+            temp_hook_fn_mlp = functools.partial(dropout_hook, p=0.2, v=0)
+            outputs = model.run_with_hooks(x, types, fwd_hooks=[
+                (f'blocks.{i}.hook_attn_out', temp_hook_fn_attn) for i in range(model.cfg.n_layers)
+            ] + [
+                (f'blocks.{i}.hook_mlp_out', temp_hook_fn_mlp) for i in range(model.cfg.n_layers)
+            ]
+            )
+        else:
+            outputs = model(x, types)
         loss = criterion(outputs, y, w, config['wandb'], mqq, mlv, mHs)
-        train_loss_epoch += loss.item()
+        train_loss_epoch += loss.item() * w.sum().item()
         sum_weights_epoch += w.sum().item()
         
         loss.backward()
         optimizer.step()
         
         # Update training metrics
+        total_train_samples_processed += len(y)
         train_metrics.update(outputs, y.argmax(dim=-1), w, mqq, mlv, dsids, mHs)
         train_metrics_MCWts.update(outputs, y.argmax(dim=-1), MCWts, mqq, mlv, dsids, mHs)
         if (n_step % 10) == 0:
             print('[%d/%d][%d/%d]\tLoss_C: %.4e' %(epoch, num_epochs, n_step, orig_len_train_dataloader, loss.item()))
         # Log training metrics every log_interval batches
-        if ((batch_idx % log_interval) == 0):
-            log_level = 2 if ((batch_idx % (longer_log_interval)) == (longer_log_interval-1)) else 0
-            train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'])
-            train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'])
-            train_metrics.reset_starts(ks=['sig_sel'])
-            train_metrics_MCWts.reset_starts(ks=['sig_sel'])
+        if ((batch_idx % log_interval) == (log_interval-1)):
             # Log learning rate
             current_lr = optimizer.param_groups[0]['lr']
             if config['wandb']:
-                wandb.log({"train/lr": current_lr}, step=global_step)
+                wandb.log({"train/lr": current_lr}, commit=False)
+                wandb.log({"train_samps_processed": total_train_samples_processed}, commit=False)
+            log_level = 2 if ((batch_idx % (longer_log_interval)) == (longer_log_interval-1)) else 0
+            train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'], commit=False)
+            train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'], commit=True)
+            train_metrics.reset_starts(ks=['sig_sel'])
+            train_metrics_MCWts.reset_starts(ks=['sig_sel'])
     
     # if config['wandb']:
     if 1:
@@ -369,13 +420,13 @@ for epoch in range(num_epochs):
         if (epoch % 1) == 0:
             log_level = 3
             train_metrics.reset_starts()
-            train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'])
+            train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'], commit=False)
             train_metrics_MCWts.reset_starts()
-            train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'])
-            # Log learning rate
-            current_lr = optimizer.param_groups[0]['lr']
-            if config['wandb']:
-                wandb.log({"train/lr": current_lr}, step=global_step)
+            train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'], commit=True)
+            # # Log learning rate
+            # current_lr = optimizer.param_groups[0]['lr']
+            # if config['wandb']:
+            #     wandb.log({"train/lr": current_lr})#, step=global_step)
             if 0:
                 # Log sample predictions
                 sample_probs = F.softmax(outputs[:5], dim=1).detach().cpu().numpy()
@@ -390,7 +441,7 @@ for epoch in range(num_epochs):
                                 for i in range(len(sample_targets))
                             ]
                         )
-                    }, step=global_step)
+                    }, commit=False)
     
     if (epoch % 1) == 0:
         # Validation phase
@@ -401,14 +452,14 @@ for epoch in range(num_epochs):
             wt_sum = 0
             for batch_idx in range(orig_len_val_dataloader):
                 batch = next(val_loader)
-                if (batch_idx >= orig_len_val_dataloader-5):
-                    continue
+                # if (batch_idx >= orig_len_val_dataloader-5):
+                #     continue
 
                 x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
                 # x, y, w, types, mqq, mlv, MCWts = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device), MCWts.to(device)
                 
                 outputs = model(x, types)
-                loss += criterion(outputs, y, w, config['wandb'], mqq, mlv, mHs).sum()
+                loss += criterion(outputs, y, w, config['wandb'], mqq, mlv, mHs).sum() * w.sum()
                 wt_sum += w.sum()
                 val_metrics.update(outputs, y.argmax(dim=-1), w, mqq, mlv, dsids, mHs)
                 val_metrics_MCWts.update(outputs, y.argmax(dim=-1), MCWts, mqq, mlv, dsids, mHs)
@@ -417,18 +468,20 @@ for epoch in range(num_epochs):
                     print('[%d/%d][%d/%d]\tVAL Loss_C: %.4e' %(epoch, num_epochs, batch_idx, orig_len_val_dataloader, loss.item()/wt_sum.item()))
             if config['wandb']:
                 wandb.log({
-                    "val/loss_total": loss.item()/wt_sum.item(),
+                    "val/loss_total": loss.item(),
                     "val/loss_ce": loss.item()/wt_sum.item(),
                     # "loss/qq_mass": qq_mass_loss.item(),
                     # "loss/lv_mass": lv_mass_loss.item()
-                })
+                }, 
+                commit=False
+                )
             # print('[%d/%d][%d/%d]\tVAL Loss_C: %.4e' %(epoch, num_epochs, batch_idx, orig_len_val_dataloader, loss.item()/wt_sum.item()))
         
         # Log validation metrics
         if config['wandb']:
             log_level = 3
-            val_metrics.compute_and_log(epoch, prefix="val", step=global_step, log_level=log_level, save=config['wandb'])
-            val_metrics_MCWts.compute_and_log(epoch, prefix="val_MC", step=global_step, log_level=log_level, save=config['wandb'])
+            val_metrics.compute_and_log(epoch, prefix="val", log_level=log_level, save=config['wandb'], commit=False)
+            val_metrics_MCWts.compute_and_log(epoch, prefix="val_MC", log_level=log_level, save=config['wandb'], commit=True)
 
     
     # Log model gradients and parameters

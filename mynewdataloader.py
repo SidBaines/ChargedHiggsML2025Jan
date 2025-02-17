@@ -46,7 +46,7 @@ for x in dsid_set:
 class ProportionalMemoryMappedDataset:
     def __init__(self, 
                  memmap_paths: Dict[int, str],  # DSID to memmap path
-                 max_n_objs: int = -1,
+                 max_objs_in_memmap: int = -1,
                  N_Real_Vars: int = 4,
                  class_proportions: Dict[int, float] = None,
                  batch_size: int = 64,
@@ -59,6 +59,7 @@ class ProportionalMemoryMappedDataset:
                  signal_reweights: typing.Optional[np.array]=None,
                  means=None,
                  stds=None,
+                 objs_to_output=14,
                  ):
         """
         Initialize a dataset loader with memory-mapped files for each class (DSID)
@@ -69,7 +70,7 @@ class ProportionalMemoryMappedDataset:
         - batch_size: Number of samples per batch
         """
         # Load memory-mapped files
-        assert(max_n_objs > 0)
+        assert(max_objs_in_memmap > 0)
         self.memmaps = {}
         self.sample_counts = {}
         self.abs_weight_sums = {}
@@ -79,6 +80,7 @@ class ProportionalMemoryMappedDataset:
         self.shuffle_objects = shuffle
         self.shuffle_batch = shuffle_batch
         self.signal_reweights = signal_reweights
+        self.objs_to_output = objs_to_output
 
         # Add train/val splitting logic
         self.is_train = is_train
@@ -120,7 +122,7 @@ class ProportionalMemoryMappedDataset:
                     path, 
                     dtype=np.float32,  # adjust dtype as needed
                     mode='r+', 
-                    shape=(total_samples, max_n_objs+2, N_Real_Vars+1)  # adjust shape as per your data
+                    shape=(total_samples, max_objs_in_memmap+2, N_Real_Vars+1)  # adjust shape as per your data
                 )
                 self.abs_weight_sums[dsid] = sum_abs_weights
                 self.weight_sums[dsid] = sum_weights
@@ -264,7 +266,7 @@ class ProportionalMemoryMappedDataset:
 
         # Now extract the training variables, labels, masses, etc.
         # print(batch_samples)
-        x = torch.from_numpy(batch_samples[:,2:,1:])
+        x = torch.from_numpy(batch_samples[:,2:2+self.objs_to_output,1:])
         x = (x - self.means)/self.stds
         y = torch.nn.functional.one_hot(torch.from_numpy(batch_samples[:,0,0]).to(torch.long), num_classes=self.n_targets).to(torch.float)
         mH = torch.from_numpy(batch_samples[:,0,1])
@@ -354,8 +356,8 @@ class ProportionalMemoryMappedDataset:
 # N_TARGETS = 3 # Number of target classes (needed for one-hot encoding)
 # N_CTX = 6 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
 # BIN_WRITE_TYPE=np.float32
-# max_n_objs = 8 # BE CAREFUL because this might change and if it does you ahve to rebinarise
-# DATAPATH = "/data/atlas/baines/tmp_" + SHUFFLE_OBJECTS*"shuffled_" + f"{max_n_objs}/"
+# max_objs_in_memmap = 8 # BE CAREFUL because this might change and if it does you ahve to rebinarise
+# DATAPATH = "/data/atlas/baines/tmp_" + SHUFFLE_OBJECTS*"shuffled_" + f"{max_objs_in_memmap}/"
 # N_Real_Vars=4 # x, y, z, energy, d0val, dzval.  BE CAREFUL because this might change and if it does you ahve to rebinarise
 
 # memmap_paths = {}
@@ -376,7 +378,7 @@ class ProportionalMemoryMappedDataset:
 #     dtype=BIN_WRITE_TYPE,  # adjust dtype as needed
 #     mode='r', 
 #     # shape=(total_samples, -1)  # adjust shape as per your data
-#     shape=(total_samples, max_n_objs+1, N_Real_Vars+1)  # adjust shape as per your data
+#     shape=(total_samples, max_objs_in_memmap+1, N_Real_Vars+1)  # adjust shape as per your data
 # )
 
 
