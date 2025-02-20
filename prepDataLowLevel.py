@@ -21,25 +21,35 @@ from utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtE
 
 # %% Some basic setup
 # Some choices about the  process
+INCLUDE_TAG_INFO = True
 TOSS_UNCERTAIN_TRUTH = True
 if not TOSS_UNCERTAIN_TRUTH:
     raise NotImplementedError # Need to work out what to do (eg. put in a flag so they're not used as training?)
 USE_OLD_TRUTH_SETTING = True
 if USE_OLD_TRUTH_SETTING:
     raise NotImplementedError # Need to check if we should require truth_agreement variable here or not
+INCLUDE_ALL_SELECTIONS = False
 SHUFFLE_OBJECTS = False
 CONVERT_TO_PT_PHI_ETA_M = False
 MH_SEL = False
 MET_CUT_ON = True
-REQUIRE_XBB = True
+REQUIRE_XBB = False # If we only select categories 0, 3, 8, 9, 10 (ie, if INCLUDE_ALL_SELECTIONS is False) then I think this is satisfied anyway
+IS_XBB_TAGGED = False
+assert (~((REQUIRE_XBB and (~IS_XBB_TAGGED))))
 N_TARGETS = 3 # Number of target classes (needed for one-hot encoding)
-N_CTX = 7 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
+if IS_XBB_TAGGED:
+    N_CTX = 7 # the SIX types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
+else:
+    N_CTX = 6 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
 BIN_WRITE_TYPE=np.float32
 max_n_objs = 14 # BE CAREFUL because this might change and if it does you ahve to rebinarise
-OUTPUT_DIR = '/data/atlas/baines/tmp_SingleXbbSelected_XbbTagged_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
+OUTPUT_DIR = '/data/atlas/baines/tmp_SingleXbbSelected' + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '/'
 # OUTPUT_DIR = './tmp/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
-N_Real_Vars=4 # x, y, z, energy, d0val, dzval.  BE CAREFUL because this might change and if it does you ahve to rebinarise
+if INCLUDE_TAG_INFO:
+    N_Real_Vars=5 # px, py, pz, energy, tagInfo.  BE CAREFUL because this might change and if it does you ahve to rebinarise
+else:
+    N_Real_Vars=4 # px, py, pz, energy.  BE CAREFUL because this might change and if it does you ahve to rebinarise
 
 # Create a mapping from the dsid/decay-type pair to integers, for the purposes of binarising data.
 dsid_set = np.array([363355,363356,363357,363358,363359,363360,363489,407342,407343,407344,
@@ -104,16 +114,11 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     else:
         truth_var = 'll_truth_decay_mode'
         mH_var = 'll_best_mH'
+    particle_features=['part_px', 'part_py', 'part_pz', 'part_energy', 'll_particle_tagInfo']
+    if INCLUDE_TAG_INFO:
+        particle_features.append('ll_particle_type')
     x_part, x_event, y = read_file(filepath, 
-                                particle_features=[
-                                    #  'part_pt', 'part_eta', 'part_phi', 'part_energy', 'type',
-                                    'part_px', 'part_py', 'part_pz', 'part_energy', 'll_particle_type',
-                                                    # 'part_isChargedHadron',
-                                                    # 'part_isNeutralHadron',
-                                                    # 'part_isPhoton',
-                                                    # 'part_isElectron',
-                                                    # 'part_isMuon',
-                                                    ],
+                                particle_features=particle_features,
                                 event_level_features=[
                                     'eventWeight',
                                     'selection_category',
@@ -192,6 +197,8 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
         x_part[:,2,:] = eta
         x_part[:,1,:] = phi
         x_part[:,3,:] = m
+    if not IS_XBB_TAGGED:
+        type_part[type_part==5] = 3 # Remove the Xbb-vs-notXbb distinction
     type_part[type_part==-1] = N_CTX-1 # Set the non-existing particles to be last (dummy) index of embedding tensor
     x_part = np.concatenate(
         [
@@ -212,7 +219,10 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
         met = x_event[:,2]
 
     # Remove events with no large-R jets and which don't pass selection category and which have too low Met Pt
-    selection_removals = ~((selection_category == 0) | (selection_category == 3) | (selection_category == 8) | (selection_category == 9) | (selection_category == 10))
+    if INCLUDE_ALL_SELECTIONS:
+        selection_removals = selection_category<0
+    else:
+        selection_removals = ~((selection_category == 0) | (selection_category == 3) | (selection_category == 8) | (selection_category == 9) | (selection_category == 10))
     is_sig = ((y[:,0] > 500000) & (y[:,0] < 600000))
     if not REQUIRE_XBB:
         no_ljet = (((type_part==3)|(type_part==5)).sum(axis=1) == 0)
@@ -304,15 +314,16 @@ def combine_arrays_for_writing(x_chunk, y_chunk, dsid_chunk, weights_chunk, mWh_
 # %%
 types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 'Xbb_ljet'}
 # DATA_PATH='/data/atlas/HplusWh/20241218_SeparateLargeRJets_NominalWeights/'
-DATA_PATH='/data/atlas/HplusWh/20250115_SeparateLargeRJets_NominalWeights_extrainfo_fixed/'
+# DATA_PATH='/data/atlas/HplusWh/20250115_SeparateLargeRJets_NominalWeights_extrainfo_fixed/'
+DATA_PATH='/data/atlas/HplusWh/20250218_Cats038910_NoDeltaRReq_TagInfo/'
 MAX_CHUNK_SIZE = 100000
 # MAX_PER_DSID = {dsid : 10000000 for dsid in dsid_set}
 # MAX_PER_DSID[410470] = 100
 for dsid in dsid_set:
-    # if dsid <= 700340:
-    # if dsid != 510124:
+    if dsid <= 700341:
     # if dsid != 410470:
-    #     continue
+    # if dsid != 510124:
+        continue
     # if '510' in str(dsid):
     #     continue
 # for dsid in [510120]:

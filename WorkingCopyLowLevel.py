@@ -61,34 +61,58 @@ if not TOSS_UNCERTAIN_TRUTH:
 USE_OLD_TRUTH_SETTING = True
 # if USE_OLD_TRUTH_SETTING:
 #     raise NotImplementedError # Need to check if we should require truth_agreement variable here (well, really in the prep data script) or not
-SHUFFLE_OBJECTS = False
+SHUFFLE_OBJECTS = True
 NORMALISE_DATA = False
+SCALE_DATA = True
+assert(not (NORMALISE_DATA and SCALE_DATA))
 CONVERT_TO_PT_PHI_ETA_M = False
+IS_XBB_TAGGED = False
+REQUIRE_XBB = False # If we only select categories 0, 3, 8, 9, 10 (ie, if INCLUDE_ALL_SELECTIONS is False) then I think this is satisfied anyway
+assert (~((REQUIRE_XBB and (~IS_XBB_TAGGED))))
+INCLUDE_TAG_INFO = True
+INCLUDE_ALL_SELECTIONS = False
 MET_CUT_ON = True
 MH_SEL = False
 N_TARGETS = 3 # Number of target classes (needed for one-hot encoding)
-N_CTX = 7 # the six types of object, plus one for 'no object;. We need to hardcode this unfortunately
+if IS_XBB_TAGGED:
+    N_CTX = 7 # the SIX types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root->Binary files we're reading in.
+    types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 'ljetXbbTagged'}
+else:
+    N_CTX = 6 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root->Binary files we're reading in.
+    types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet'}
 USE_DROPOUT = True
 BIN_WRITE_TYPE=np.float32
 max_n_objs_in_file = 14 # BE CAREFUL because this might change and if it does you ahve to rebinarise
 max_n_objs_to_read = 14
-N_Real_Vars = 4 # x, y, z, energy, d0val, dzval.  BE CAREFUL because this might change and if it does you ahve to rebinarise
-types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 'ljetXbbTagged'}
+if INCLUDE_TAG_INFO:
+    N_Real_Vars=5 # px, py, pz, energy, tagInfo.  BE CAREFUL because this might change and if it does you ahve to rebinarise
+else:
+    N_Real_Vars=4 # px, py, pz, energy.  BE CAREFUL because this might change and if it does you ahve to rebinarise
+
 
 # %%
 # Set up stuff to read in data from bin file
 
 batch_size = 64*8
 batch_size = 64*8*16
-batch_size = 128
+batch_size = 256
 DATA_PATH=f'/data/atlas/baines/tmp2_SingleXbbSelected_XbbTagged_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired' + '_mHSel'*MH_SEL + '/'
 DATA_PATH=f'/data/atlas/baines/tmp_SingleXbbSelected_XbbTagged_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired' + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
+DATA_PATH=f'/data/atlas/baines/tmp_SingleXbbSelected' + '_XbbTagged'*IS_XBB_TAGGED + f'_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '/'
 if NORMALISE_DATA:
     means = np.load(f'{DATA_PATH}mean.npy')[1:]
     stds = np.load(f'{DATA_PATH}std.npy')[1:]
 else:
     means = None
-    stds = None
+    if SCALE_DATA:
+        stds = np.zeros(N_Real_Vars)
+        if INCLUDE_TAG_INFO:
+            stds[:-1] = 1e5
+            stds[-1] = 1
+        else:
+            stds[:] = 1e5
+    else:
+        stds = None
 memmap_paths = {}
 for file_name in os.listdir(DATA_PATH):
     if ('shape' in file_name) or ('npy' in file_name):
@@ -105,7 +129,7 @@ train_dataloader = ProportionalMemoryMappedDataset(
                  is_train=True,
                  n_targets=N_TARGETS,
                  shuffle=SHUFFLE_OBJECTS,
-                 train_split=0.3,
+                 train_split=0.2,
                  means=means,
                  stds=stds,
                  objs_to_output=max_n_objs_to_read,
@@ -283,6 +307,15 @@ def multi_cosine_lr_scheduler(epoch: int, lrs:List[float], n_epochs: int):
         lr = lrs[-1]
     return lr
 
+def basic_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int, log=True):
+    """
+    This function calculates the learning rate following a flat decreasing schedule
+    """
+    if log:
+        return lr_high * np.power((lr_low/lr_high), epoch/n_epochs)
+    else:
+        return lr_high - (lr_high - lr_low)*(epoch/n_epochs)
+
 
 # SHOULD CHANGE WEIGHT DECAY BACK (IT WAS 1e-5 before)
 # criterion = nn.CrossEntropyLoss(reduction='none')  # 'none' to handle sample weights
@@ -305,24 +338,35 @@ def multi_cosine_lr_scheduler(epoch: int, lrs:List[float], n_epochs: int):
 #             print('[%d/%d][%d/%d]\tLoss_C: %.4e' %(epoch, num_epochs, n_step, num_steps,class_loss.item()))
 
 # %%
+if 0:
+    n_epochs = 100
+    plt.plot([basic_lr_scheduler(i, 1, 1e-3, n_epochs=n_epochs, log=False) for i in range(n_epochs)])
+    plt.plot([basic_lr_scheduler(i, 1, 1e-3, n_epochs=n_epochs, log=True) for i in range(n_epochs)])
+    plt.yscale('log')
+    plt.show()
+# [basic_lr_scheduler(i, 1, 1e-3, n_epochs=n_epochs) for i in range(n_epochs)]
+
+
+# %%
 
 # %%
 model, train_loader, val_loader = models[model_n]['model'], train_dataloader, val_dataloader
-num_epochs = 150
+num_epochs = 75
 # log_interval = 100
 log_interval = int(50e3/batch_size)
 # longer_log_interval = log_interval*10
 longer_log_interval = 100000000000
-SAVE_MODEL_EVERY = 50
+SAVE_MODEL_EVERY = 25
 config = {
-        "learning_rates": [5e-4, 1e-5, 1e-6],
+        "learning_rate": 1e-4,
+        "learning_rate_low": 1e-7,
         "architecture": "PhysicsTransformer",
         "dataset": "ATLAS_ChargedHiggs",
         "epochs": num_epochs,
         "batch_size": batch_size,
         "wandb":True,
         "name":"_"+timeStr+"_LowLevel",
-        "weight_decay":1e-6,
+        "weight_decay":1e-10,
     }
 optimizer = torch.optim.Adam(models[model_n]['model'].parameters(), lr=1e-4, weight_decay=config['weight_decay'])
 if config['wandb']:
@@ -350,7 +394,7 @@ global_step = 0
 total_train_samples_processed = 0
 for epoch in range(num_epochs):
     # Update learning rate based on the cosine scheduler
-    new_lr = multi_cosine_lr_scheduler(epoch, config['learning_rates'], num_epochs)
+    new_lr = basic_lr_scheduler(epoch, config['learning_rate'], config['learning_rate_low'], num_epochs, True)
     for param_group in optimizer.param_groups:
         param_group['lr'] = new_lr
     print(f"Epoch {epoch + 1}/{num_epochs}, Learning Rate: {new_lr:.6e}")
@@ -377,8 +421,8 @@ for epoch in range(num_epochs):
         
         optimizer.zero_grad()
         if USE_DROPOUT:
-            temp_hook_fn_attn = functools.partial(dropout_hook, p=0.2, v=0)
-            temp_hook_fn_mlp = functools.partial(dropout_hook, p=0.2, v=0)
+            temp_hook_fn_attn = functools.partial(dropout_hook, p=0.1, v=0)
+            temp_hook_fn_mlp = functools.partial(dropout_hook, p=0.1, v=0)
             outputs = model.run_with_hooks(x, types, fwd_hooks=[
                 (f'blocks.{i}.hook_attn_out', temp_hook_fn_attn) for i in range(model.cfg.n_layers)
             ] + [
@@ -387,6 +431,7 @@ for epoch in range(num_epochs):
             )
         else:
             outputs = model(x, types)
+        # assert(False)
         loss = criterion(outputs, y, w, config['wandb'], mqq, mlv, mHs)
         train_loss_epoch += loss.item() * w.sum().item()
         sum_weights_epoch += w.sum().item()
