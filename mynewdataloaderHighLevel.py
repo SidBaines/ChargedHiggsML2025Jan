@@ -284,4 +284,4 @@ class ProportionalMemoryMappedDatasetHighLevel:
         else:
             all_samples = sum(len(indices) for indices in self.current_indices.values())
             print('WARNING This is kinda of a sketch way of calculating the number of batches.')
-            return all_samples // self.batch_size
+            return ((all_samples-1) // self.batch_size) + 1

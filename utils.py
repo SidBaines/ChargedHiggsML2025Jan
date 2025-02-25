@@ -1,5 +1,90 @@
 import numpy as np
 import torch
+import matplotlib.pyplot as plt
+import math
+from typing import List
+
+
+# %%
+# Cosine learning rate scheduler parameters
+def cosine_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int):
+    """
+    This function calculates the learning rate following a cosine schedule
+    that oscillates between `lr_high` and `lr_low` every `n_epochs`.
+    """
+    # Cosine annealing function
+    if epoch<n_epochs:
+        cycle_epoch = epoch % n_epochs
+        progress = cycle_epoch / n_epochs
+        lr = lr_low + 0.5 * (lr_high - lr_low) * (1 + math.cos(math.pi * progress))
+    else:
+        lr = lr_low
+    return lr
+
+def multi_cosine_lr_scheduler(epoch: int, lrs:List[float], n_epochs: int):
+    """
+    This function calculates the learning rate following a cosine schedule
+    flattens every (n_epochs)/len(lrs) epochs, at each element of lrs
+    """
+    # Cosine annealing function
+    num_epochs_per_chunk = int(n_epochs/(len(lrs)-1))
+    chunk = epoch // num_epochs_per_chunk
+    if chunk<len(lrs)-1:
+        lr_high = lrs[chunk]
+        lr_low = lrs[chunk+1]
+        cycle_epoch = epoch % num_epochs_per_chunk
+        progress = cycle_epoch / num_epochs_per_chunk
+        lr = lr_low + 0.5 * (lr_high - lr_low) * (1 + math.cos(math.pi * progress))
+    else:
+        lr = lrs[-1]
+    return lr
+
+def basic_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int, log=True):
+    """
+    This function calculates the learning rate following a flat decreasing schedule
+    """
+    if log:
+        return lr_high * np.power((lr_low/lr_high), epoch/n_epochs)
+    else:
+        return lr_high - (lr_high - lr_low)*(epoch/n_epochs)
+
+# %%
+def myhist2d(xvals, 
+             yvals,
+             wvals=None,
+             logx = True,
+             logy = True,
+             logz = False,
+             nbins=100,
+             xlabel='',
+             ylabel='',
+):
+    if (wvals is None):
+        wvals = np.ones_like(xvals)
+    bins=[nbins,nbins]
+    if logx:
+        log_binsx = np.logspace(np.log10(min(xvals).item()), np.log10(max(xvals).item()), num=nbins)
+        bins[0] = log_binsx
+    if logy:
+        log_binsy = np.logspace(np.log10(min(yvals).item()), np.log10(max(yvals).item()), num=nbins)
+        bins[1] = log_binsy
+    corrcoeff = weighted_correlation(torch.from_numpy(xvals), torch.from_numpy(yvals), torch.from_numpy(wvals)).item()
+    plt.figure(figsize=(4.5,4))
+    if logz:
+        plt.hist2d(xvals, yvals, weights=wvals, norm=mpl.colors.LogNorm(), bins=bins)
+    else:
+        plt.hist2d(xvals, yvals, weights=wvals, bins=bins)
+    # plt.hist2d(xvals, yvals, weights=wvals, bins=[log_binsx, log_binsy])
+    plt.title(f'Weighted by abs(MC)\nCorrelation: {corrcoeff:5f}')
+    if logx:
+        plt.xscale('log')
+    if logy:
+        plt.yscale('log')
+    plt.colorbar()
+    plt.xlabel(xlabel)
+    plt.ylabel(ylabel)
+    plt.tight_layout()
+    plt.show()
 
 # %%
 

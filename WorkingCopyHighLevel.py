@@ -188,7 +188,7 @@ models[model_n] = {
     'model':ConfigurableNN(
         N_inputs=N_Real_Vars, 
         N_targets=N_TARGETS, 
-        hidden_layers=[256, 256, 256], 
+        hidden_layers=[200, 200, 200], 
         dropout_prob=0.1, 
         use_batchnorm=False
         ).to(device)

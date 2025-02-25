@@ -296,50 +296,6 @@ class_weights = [1 for _ in range(N_TARGETS)]
 labels = ['Bkg', 'Lep', 'Had'] # truth==0 is bkg, truth==1 is leptonic decay, truth==2 is hadronic decay
 class_weights_expanded = einops.repeat(torch.Tensor(class_weights), 't -> batch t', batch=batch_size).to(device)
 
-# %%
-
-# Cosine learning rate scheduler parameters
-import math
-def cosine_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int):
-    """
-    This function calculates the learning rate following a cosine schedule
-    that oscillates between `lr_high` and `lr_low` every `n_epochs`.
-    """
-    # Cosine annealing function
-    if epoch<n_epochs:
-        cycle_epoch = epoch % n_epochs
-        progress = cycle_epoch / n_epochs
-        lr = lr_low + 0.5 * (lr_high - lr_low) * (1 + math.cos(math.pi * progress))
-    else:
-        lr = lr_low
-    return lr
-
-def multi_cosine_lr_scheduler(epoch: int, lrs:List[float], n_epochs: int):
-    """
-    This function calculates the learning rate following a cosine schedule
-    flattens every (n_epochs)/len(lrs) epochs, at each element of lrs
-    """
-    # Cosine annealing function
-    num_epochs_per_chunk = int(n_epochs/(len(lrs)-1))
-    chunk = epoch // num_epochs_per_chunk
-    if chunk<len(lrs)-1:
-        lr_high = lrs[chunk]
-        lr_low = lrs[chunk+1]
-        cycle_epoch = epoch % num_epochs_per_chunk
-        progress = cycle_epoch / num_epochs_per_chunk
-        lr = lr_low + 0.5 * (lr_high - lr_low) * (1 + math.cos(math.pi * progress))
-    else:
-        lr = lrs[-1]
-    return lr
-
-def basic_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int, log=True):
-    """
-    This function calculates the learning rate following a flat decreasing schedule
-    """
-    if log:
-        return lr_high * np.power((lr_low/lr_high), epoch/n_epochs)
-    else:
-        return lr_high - (lr_high - lr_low)*(epoch/n_epochs)
 
 
 # SHOULD CHANGE WEIGHT DECAY BACK (IT WAS 1e-5 before)
@@ -363,6 +319,7 @@ def basic_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int,
 #             print('[%d/%d][%d/%d]\tLoss_C: %.4e' %(epoch, num_epochs, n_step, num_steps,class_loss.item()))
 
 # %%
+from utils import basic_lr_scheduler
 if 0:
     n_epochs = 100
     plt.plot([basic_lr_scheduler(i, 1, 1e-3, n_epochs=n_epochs, log=False) for i in range(n_epochs)])
