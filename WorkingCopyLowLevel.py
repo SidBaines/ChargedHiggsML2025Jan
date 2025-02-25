@@ -38,11 +38,6 @@ timeStr = datetime.now().strftime("%Y%m%d-%H%M%S")
 saveDir = "output/" + timeStr  + "_TrainingOutput/"
 os.makedirs(saveDir)
 print(saveDir)
-if 1:
-    # device = torch.device("mps" if torch.mps.is_available() else "cpu")
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-else:
-    device = "cpu"
 # Save the current script to the saveDir so we know what the training script was
 def save_current_script(destination_directory):
     current_script_path = os.path.abspath(__file__)
@@ -55,6 +50,12 @@ save_current_script('%s'%(saveDir))
 
 # Some choices about the training process
 # Assumes that the data has already been binarised
+USE_DEEPSETS = False
+if not USE_DEEPSETS:
+    # device = torch.device("mps" if torch.mps.is_available() else "cpu")
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+else: # For some reason, deepsets model doesn't work on GPU
+    device = "cpu"
 USE_LORENTZ_INVARIANT_FEATURES = True
 TOSS_UNCERTAIN_TRUTH = True
 if not TOSS_UNCERTAIN_TRUTH:
@@ -196,32 +197,84 @@ class LorentzInvariantFeatures(nn.Module):
         
         return torch.stack([mass_squared, pt, eta, phi], dim=-1)
 
-
-class MyHookedTransformer(HookedTransformer):
-    def __init__(self, cfg, mass_input_layer=2, mass_hidden_dim=256, **kwargs):
-        super(MyHookedTransformer, self).__init__(cfg, **kwargs)
-        if USE_LORENTZ_INVARIANT_FEATURES:
-            self.invariant_features = LorentzInvariantFeatures()
-        self.hook_dict['hook_mytokens'] = HookPoint()
-        self.hook_dict['hook_mytokens'].name = 'hook_mytokens'
-        self.mod_dict['hook_mytokens'] = self.hook_dict['hook_mytokens']
-        self.W_Embed = nn.Parameter(torch.empty((cfg.n_ctx, cfg.d_vocab, cfg.d_model)))
-        nn.init.normal_(self.W_Embed, std=0.02)
+if USE_DEEPSETS:
+    class DeepSetsWithGatedAttention(nn.Module):
+        def __init__(self, input_dim=5, num_classes=3, hidden_dim=256, dropout_p=0.0):
+            super().__init__()
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                self.invariant_features = LorentzInvariantFeatures()
+            # Object type embedding
+            embedding_size=32
+            self.type_embedding = nn.Embedding(6, embedding_size)  # 5 object types
+            # Initial per-object processing
+            self.object_net = nn.Sequential(
+                nn.Linear(input_dim + embedding_size, hidden_dim),  # +32 for type embedding
+                nn.LayerNorm(hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim)
+            )
+            # Gated attention mechanism
+            self.gate_net = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.Sigmoid()
+            )
+            self.attention_net = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.Tanh()
+            )
+            # Final classification layers
+            self.classifier = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout_p),
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.ReLU(),
+                # nn.Dropout(dropout_p),
+                nn.Linear(hidden_dim // 2, num_classes)
+            )
         
-    def forward(self, tokens: Float[Tensor, "batch object d_input"], token_types: Float[Tensor, "batch object"], **kwargs) -> Float[Tensor, "batch d_model"]:
-        self.hook_dict['hook_mytokens'](tokens)
-        if USE_LORENTZ_INVARIANT_FEATURES:
-            tokens[...,:4] = self.invariant_features(tokens[...,:4])
-        expanded_W_E = self.W_Embed.unsqueeze(0).expand(token_types.shape[0], -1, -1, -1)
-        expanded_types = token_types.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.W_Embed.shape[-2], self.W_Embed.shape[-1])
-        W_E_selected = torch.gather(expanded_W_E, dim=1, index=expanded_types)
-        output = einops.einsum(tokens, W_E_selected, "batch object d_input, batch object d_input d_model -> batch object d_model")
-        if 'start_at_layer' in kwargs:
-            raise NotImplementedError
-        else:
-            class_outs = super(MyHookedTransformer, self).forward(output, start_at_layer=0, **kwargs)
-            class_outs = class_outs[:,0]
-        return class_outs
+        def forward(self, object_features, types):
+            # Get type embeddings and combine with features
+            type_emb = self.type_embedding(types)
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                object_features[...,:4] = self.invariant_features(object_features[...,:4])
+            combined = torch.cat([object_features, type_emb], dim=-1)
+            # Process each object
+            object_features = self.object_net(combined)
+            # Apply gated attention
+            gates = self.gate_net(object_features)
+            attention = self.attention_net(object_features)
+            gated_features = gates * attention
+            # Permutation-invariant pooling
+            pooled = torch.sum(gated_features, dim=1)
+            return self.classifier(pooled)
+    
+else:
+    class MyHookedTransformer(HookedTransformer):
+        def __init__(self, cfg, mass_input_layer=2, mass_hidden_dim=256, **kwargs):
+            super(MyHookedTransformer, self).__init__(cfg, **kwargs)
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                self.invariant_features = LorentzInvariantFeatures()
+            self.hook_dict['hook_mytokens'] = HookPoint()
+            self.hook_dict['hook_mytokens'].name = 'hook_mytokens'
+            self.mod_dict['hook_mytokens'] = self.hook_dict['hook_mytokens']
+            self.W_Embed = nn.Parameter(torch.empty((cfg.n_ctx, cfg.d_vocab, cfg.d_model)))
+            nn.init.normal_(self.W_Embed, std=0.02)
+            
+        def forward(self, tokens: Float[Tensor, "batch object d_input"], token_types: Float[Tensor, "batch object"], **kwargs) -> Float[Tensor, "batch d_model"]:
+            self.hook_dict['hook_mytokens'](tokens)
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                tokens[...,:4] = self.invariant_features(tokens[...,:4])
+            expanded_W_E = self.W_Embed.unsqueeze(0).expand(token_types.shape[0], -1, -1, -1)
+            expanded_types = token_types.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.W_Embed.shape[-2], self.W_Embed.shape[-1])
+            W_E_selected = torch.gather(expanded_W_E, dim=1, index=expanded_types)
+            output = einops.einsum(tokens, W_E_selected, "batch object d_input, batch object d_input d_model -> batch object d_model")
+            if 'start_at_layer' in kwargs:
+                raise NotImplementedError
+            else:
+                class_outs = super(MyHookedTransformer, self).forward(output, start_at_layer=0, **kwargs)
+                class_outs = class_outs[:,0]
+            return class_outs
 
 # %%
 # Create a new model
@@ -229,69 +282,75 @@ models = {}
 fit_histories = {}
 model_n = 0
 
-# Create the model with the desired properties
-model_cfg = HookedTransformerConfig(
-    # normalization_type='LN',
-    normalization_type='LN',
-    d_model=64,
-    d_head=16,
-    n_layers=2,
-    n_heads=2,
-    n_ctx=N_CTX, # Max number of types of object per event + 1 because we want a dummy row in the embedding matrix for non-existing particles
-    d_vocab=N_Real_Vars, # Number of inputs per object
-    d_vocab_out=N_TARGETS,  # 2 because we're doing binary classification
-    d_mlp=256,
-    attention_dir="bidirectional",  # defaults to "causal"
-    act_fn="relu",
-    use_attn_result=True,
-    device=str(device),
-    use_hook_tokens=True,
-)
+if not USE_DEEPSETS:
+    # Create the model with the desired properties
+    model_cfg = HookedTransformerConfig(
+        # normalization_type='LN',
+        normalization_type='LN',
+        d_model=64,
+        d_head=16,
+        n_layers=2,
+        n_heads=2,
+        n_ctx=N_CTX, # Max number of types of object per event + 1 because we want a dummy row in the embedding matrix for non-existing particles
+        d_vocab=N_Real_Vars, # Number of inputs per object
+        d_vocab_out=N_TARGETS,  # 2 because we're doing binary classification
+        d_mlp=256,
+        attention_dir="bidirectional",  # defaults to "causal"
+        act_fn="relu",
+        use_attn_result=True,
+        device=str(device),
+        use_hook_tokens=True,
+    )
+else:
+    model_cfg = {'d_model': 256, 'dropout_p': 0.1}
 
-# models[model_n] = {'model' : Net(model_cfg).to(device), 'inputs' : inputs}
-models[model_n] = {'model' : MyHookedTransformer(model_cfg).to(device)}
+if USE_DEEPSETS:
+    # models[model_n] = {'model' : Net(model_cfg).to(device), 'inputs' : inputs}
+    models[model_n] = {'model' : DeepSetsWithGatedAttention(hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p']).to(device)}
+else:
+    models[model_n] = {'model' : MyHookedTransformer(model_cfg).to(device)}
 print(sum(p.numel() for p in models[model_n]['model'].parameters()))
 
 # %%
-def add_perma_hooks_to_mask_pad_tokens(
-    model: HookedTransformer
-) -> HookedTransformer:
-    # Hook which operates on the tokens, and stores a mask where tokens equal [pad]
-    def cache_padding_tokens_mask(tokens: Float[Tensor, "batch object d_input"], hook: HookPoint) -> None:
-        # print("Caching padding tokens!")
-        hook.ctx["padding_tokens_mask"] = einops.rearrange(torch.all(tokens==0, dim=-1), "b sK -> b 1 1 sK")
+if not USE_DEEPSETS:
+    def add_perma_hooks_to_mask_pad_tokens(
+        model: HookedTransformer
+    ) -> HookedTransformer:
+        # Hook which operates on the tokens, and stores a mask where tokens equal [pad]
+        def cache_padding_tokens_mask(tokens: Float[Tensor, "batch object d_input"], hook: HookPoint) -> None:
+            # print("Caching padding tokens!")
+            hook.ctx["padding_tokens_mask"] = einops.rearrange(torch.all(tokens==0, dim=-1), "b sK -> b 1 1 sK")
 
-    # Apply masking, by referencing the mask stored in the `hook_tokens` hook context
-    def apply_padding_tokens_mask(
-        attn_scores: Float[Tensor, "batch head seq_Q seq_K"],
+        # Apply masking, by referencing the mask stored in the `hook_tokens` hook context
+        def apply_padding_tokens_mask(
+            attn_scores: Float[Tensor, "batch head seq_Q seq_K"],
+            hook: HookPoint,
+        ) -> None:
+            attn_scores.masked_fill_(model.hook_dict["hook_mytokens"].ctx["padding_tokens_mask"], -1e5)
+            if hook.layer() == model.cfg.n_layers - 1:
+                del model.hook_dict["hook_mytokens"].ctx["padding_tokens_mask"]
+
+        # Add these hooks as permanent hooks (i.e. they aren't removed after functions like run_with_hooks)
+        for name, hook in model.hook_dict.items():
+            if name == "hook_mytokens":
+                hook.add_perma_hook(cache_padding_tokens_mask)  # type: ignore
+            elif name.endswith("attn_scores"):
+                hook.add_perma_hook(apply_padding_tokens_mask)  # type: ignore
+
+        return model
+
+    def dropout_hook(
+        resid: Float[Tensor, "batch object d_model"],
         hook: HookPoint,
+        p=0.1,
+        v=-1e5,
     ) -> None:
-        attn_scores.masked_fill_(model.hook_dict["hook_mytokens"].ctx["padding_tokens_mask"], -1e5)
-        if hook.layer() == model.cfg.n_layers - 1:
-            del model.hook_dict["hook_mytokens"].ctx["padding_tokens_mask"]
+        resid.masked_fill_((torch.rand(resid.shape) < p).to(resid.device), v)
 
-    # Add these hooks as permanent hooks (i.e. they aren't removed after functions like run_with_hooks)
-    for name, hook in model.hook_dict.items():
-        if name == "hook_mytokens":
-            hook.add_perma_hook(cache_padding_tokens_mask)  # type: ignore
-        elif name.endswith("attn_scores"):
-            hook.add_perma_hook(apply_padding_tokens_mask)  # type: ignore
-
-    return model
-
-def dropout_hook(
-    resid: Float[Tensor, "batch object d_model"],
-    hook: HookPoint,
-    p=0.1,
-    v=-1e5,
-) -> None:
-    resid.masked_fill_((torch.rand(resid.shape) < p).to(resid.device), v)
-
-    
+    models[model_n]['model'].reset_hooks(including_permanent=True)
+    models[model_n]['model'] = add_perma_hooks_to_mask_pad_tokens(models[model_n]['model'])
 
 
-models[model_n]['model'].reset_hooks(including_permanent=True)
-models[model_n]['model'] = add_perma_hooks_to_mask_pad_tokens(models[model_n]['model'])
 class_weights = [1 for _ in range(N_TARGETS)]
 labels = ['Bkg', 'Lep', 'Had'] # truth==0 is bkg, truth==1 is leptonic decay, truth==2 is hadronic decay
 class_weights_expanded = einops.repeat(torch.Tensor(class_weights), 't -> batch t', batch=batch_size).to(device)
@@ -340,13 +399,13 @@ log_interval = int(50e3/batch_size)
 longer_log_interval = 100000000000
 SAVE_MODEL_EVERY = 25
 config = {
-        "learning_rate": 1e-4,
+        "learning_rate": 1e-5,
         "learning_rate_low": 1e-7,
         "architecture": "PhysicsTransformer",
         "dataset": "ATLAS_ChargedHiggs",
         "epochs": num_epochs,
         "batch_size": batch_size,
-        "wandb":True,
+        "wandb":False,
         "name":"_"+timeStr+"_LowLevel",
         "weight_decay":1e-10,
     }
@@ -402,7 +461,7 @@ for epoch in range(num_epochs):
         # x, y, w, types, mqq, mlv, MCWts, mH = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device), MCWts.to(device)
         
         optimizer.zero_grad()
-        if USE_DROPOUT:
+        if (not USE_DEEPSETS) and USE_DROPOUT:
             temp_hook_fn_attn = functools.partial(dropout_hook, p=0.1, v=0)
             temp_hook_fn_mlp = functools.partial(dropout_hook, p=0.1, v=0)
             outputs = model.run_with_hooks(x, types, fwd_hooks=[
