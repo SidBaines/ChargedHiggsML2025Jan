@@ -55,6 +55,7 @@ save_current_script('%s'%(saveDir))
 
 # Some choices about the training process
 # Assumes that the data has already been binarised
+USE_LORENTZ_INVARIANT_FEATURES = True
 TOSS_UNCERTAIN_TRUTH = True
 if not TOSS_UNCERTAIN_TRUTH:
     raise NotImplementedError # Need to work out what to do (eg. put in a flag so they're not used as training?)
@@ -119,6 +120,7 @@ for file_name in os.listdir(DATA_PATH):
         continue
     dsid = file_name[5:11]
     memmap_paths[int(dsid)] = DATA_PATH+file_name
+train_split=0.5
 train_dataloader = ProportionalMemoryMappedDataset(
                  memmap_paths = memmap_paths,  # DSID to memmap path
                  max_objs_in_memmap=max_n_objs_in_file,
@@ -129,7 +131,7 @@ train_dataloader = ProportionalMemoryMappedDataset(
                  is_train=True,
                  n_targets=N_TARGETS,
                  shuffle=SHUFFLE_OBJECTS,
-                 train_split=0.2,
+                 train_split=train_split,
                  means=means,
                  stds=stds,
                  objs_to_output=max_n_objs_to_read,
@@ -147,7 +149,7 @@ val_dataloader = ProportionalMemoryMappedDataset(
                  is_train=False,
                  n_targets=N_TARGETS,
                  shuffle=SHUFFLE_OBJECTS,
-                 train_split=0.8,
+                 train_split=train_split,
                  means=means,
                  stds=stds,
                  objs_to_output=max_n_objs_to_read,
@@ -176,9 +178,30 @@ if 0:
 
 # %%
 
+
+class LorentzInvariantFeatures(nn.Module):
+    def __init__(self):
+        super().__init__()
+    
+    def forward(self, four_momenta):
+        # four_momenta shape: [..., 4] where last dim is (px, py, pz, E)
+        # Calculate Lorentz invariant quantities
+        mass_squared = four_momenta[..., 3]**2 - (four_momenta[..., 0]**2 + 
+                                                 four_momenta[..., 1]**2 + 
+                                                 four_momenta[..., 2]**2)
+        pt = torch.sqrt(four_momenta[..., 0]**2 + four_momenta[..., 1]**2)
+        eta = torch.asinh(four_momenta[..., 2] / pt)
+        eta = torch.nan_to_num(eta, nan=0.0)
+        phi = torch.atan2(four_momenta[..., 1], four_momenta[..., 0])
+        
+        return torch.stack([mass_squared, pt, eta, phi], dim=-1)
+
+
 class MyHookedTransformer(HookedTransformer):
     def __init__(self, cfg, mass_input_layer=2, mass_hidden_dim=256, **kwargs):
         super(MyHookedTransformer, self).__init__(cfg, **kwargs)
+        if USE_LORENTZ_INVARIANT_FEATURES:
+            self.invariant_features = LorentzInvariantFeatures()
         self.hook_dict['hook_mytokens'] = HookPoint()
         self.hook_dict['hook_mytokens'].name = 'hook_mytokens'
         self.mod_dict['hook_mytokens'] = self.hook_dict['hook_mytokens']
@@ -187,6 +210,8 @@ class MyHookedTransformer(HookedTransformer):
         
     def forward(self, tokens: Float[Tensor, "batch object d_input"], token_types: Float[Tensor, "batch object"], **kwargs) -> Float[Tensor, "batch d_model"]:
         self.hook_dict['hook_mytokens'](tokens)
+        if USE_LORENTZ_INVARIANT_FEATURES:
+            tokens[...,:4] = self.invariant_features(tokens[...,:4])
         expanded_W_E = self.W_Embed.unsqueeze(0).expand(token_types.shape[0], -1, -1, -1)
         expanded_types = token_types.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.W_Embed.shape[-2], self.W_Embed.shape[-1])
         W_E_selected = torch.gather(expanded_W_E, dim=1, index=expanded_types)
@@ -208,14 +233,14 @@ model_n = 0
 model_cfg = HookedTransformerConfig(
     # normalization_type='LN',
     normalization_type='LN',
-    d_model=20,
-    d_head=8,
-    n_layers=4,
-    n_heads=4,
+    d_model=64,
+    d_head=16,
+    n_layers=2,
+    n_heads=2,
     n_ctx=N_CTX, # Max number of types of object per event + 1 because we want a dummy row in the embedding matrix for non-existing particles
     d_vocab=N_Real_Vars, # Number of inputs per object
     d_vocab_out=N_TARGETS,  # 2 because we're doing binary classification
-    d_mlp=100,
+    d_mlp=256,
     attention_dir="bidirectional",  # defaults to "causal"
     act_fn="relu",
     use_attn_result=True,
@@ -351,7 +376,7 @@ if 0:
 
 # %%
 model, train_loader, val_loader = models[model_n]['model'], train_dataloader, val_dataloader
-num_epochs = 75
+num_epochs = 100
 # log_interval = 100
 log_interval = int(50e3/batch_size)
 # longer_log_interval = log_interval*10

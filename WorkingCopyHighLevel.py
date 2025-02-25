@@ -28,6 +28,7 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score
 import shutil
 from MyMetricsHighLevel import HEPMetrics, HEPLoss, init_wandb
+from typing import List
 
 # %%
 timeStr = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -69,8 +70,9 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 batch_size = 64*8
 DATA_PATH = '/data/atlas/baines/tmp3_highLevel' + '_MetCut'*MET_CUT_ON + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
-memmap_paths = {}
-channel = 'lvbb'
+memmap_paths_train = {}
+memmap_paths_val = {}
+channel = 'qqbb'
 means = np.load(f'{DATA_PATH}{channel}_mean.npy')
 stds = np.load(f'{DATA_PATH}{channel}_std.npy')
 for file_name in os.listdir(DATA_PATH):
@@ -80,13 +82,15 @@ for file_name in os.listdir(DATA_PATH):
         continue
     if (channel in file_name) and ('dsid' in file_name):
         dsid = file_name[5:11]
-        # if dsid < 510120:
-        memmap_paths[int(dsid)] = DATA_PATH+file_name
+        memmap_paths_val[int(dsid)] = DATA_PATH+file_name
+        # if (int(dsid) > 510116) or (int(dsid) < 500000) or (int(dsid) > 600000):
+        if True:
+            memmap_paths_train[int(dsid)] = DATA_PATH+file_name
     else:
         pass
-train_split=0.8
+train_split=0.5
 train_dataloader = ProportionalMemoryMappedDatasetHighLevel(
-                 memmap_paths = memmap_paths,  # DSID to memmap path
+                 memmap_paths = memmap_paths_train,  # DSID to memmap path
                  N_Real_Vars=N_Real_Vars, # Will auto add 4 (for the y, w, dsid, mWh) inside the funciton
                  class_proportions = None,
                  batch_size=batch_size,
@@ -100,7 +104,7 @@ train_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
 val_dataloader = ProportionalMemoryMappedDatasetHighLevel(
-                 memmap_paths = memmap_paths,  # DSID to memmap path
+                 memmap_paths = memmap_paths_val,  # DSID to memmap path
                  N_Real_Vars=N_Real_Vars,
                  class_proportions = None,
                  batch_size=batch_size,
@@ -196,17 +200,9 @@ class_weights = [1 for _ in range(N_TARGETS)]
 labels = ['Bkg', 'Lep', 'Had'] # truth==0 is bkg, truth==1 is leptonic decay, truth==2 is hadronic decay
 class_weights_expanded = einops.repeat(torch.Tensor(class_weights), 't -> batch t', batch=batch_size).to(device)
 # Cosine learning rate scheduler parameters
-import math
-def cosine_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int):
-    """
-    This function calculates the learning rate following a cosine schedule
-    that oscillates between `lr_high` and `lr_low` every `n_epochs`.
-    """
-    # Cosine annealing function
-    cycle_epoch = epoch % n_epochs
-    progress = cycle_epoch / n_epochs
-    lr = lr_low + 0.5 * (lr_high - lr_low) * (1 + math.cos(math.pi * progress))
-    return lr
+from utils import basic_lr_scheduler
+
+
 # SHOULD CHANGE WEIGHT DECAY BACK (IT WAS 1e-5 before)
 num_epochs = 300
 
@@ -216,8 +212,9 @@ log_interval = 50
 longer_log_interval = 1000000000
 SAVE_MODEL_EVERY = int(num_epochs/3)
 config = {
-        "learning_rate": 5e-5,
-        "learning_rate_low": 1e-5,
+        "learning_rate_high": 1e-5,
+        "learning_rate_low": 1e-7,
+        # "learning_rates": [1e-4, 1e-5, 1e-6],
         "cosine_lr_n_epochs": num_epochs,   # Number of epochs to complete one cycle of learning rate
         "architecture": "HighLevelNN",
         "dataset": "ATLAS_ChargedHiggs",
@@ -235,15 +232,17 @@ if config['wandb']:
 
 criterion = HEPLoss()
 train_metrics = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
-val_metrics = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[1000, 5000])
+val_metrics = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=val_dataloader.abs_weight_sums, signal_acceptance_levels=[1000, 5000])
 train_metrics_MCWts = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
-val_metrics_MCWts = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[1000, 5000])
+val_metrics_MCWts = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=val_dataloader.weight_sums, signal_acceptance_levels=[1000, 5000])
 global_step = 0
+total_train_samples_processed = 0
 
 # %%
 for epoch in range(num_epochs):
     # Update learning rate based on the cosine scheduler
-    new_lr = cosine_lr_scheduler(epoch, config['learning_rate'], config['learning_rate_low'], config['cosine_lr_n_epochs'])
+    # new_lr = cosine_lr_scheduler(epoch, config['learning_rate'], config['learning_rate_low'], config['cosine_lr_n_epochs'])
+    new_lr = basic_lr_scheduler(epoch, config['learning_rate_high'], config['learning_rate_low'], num_epochs)
     for param_group in optimizer.param_groups:
         param_group['lr'] = new_lr
     print(f"Epoch {epoch + 1}/{num_epochs}, Learning Rate: {new_lr:.6e}")
@@ -262,8 +261,8 @@ for epoch in range(num_epochs):
     for batch_idx in range(orig_len_train_dataloader):
         n_step+=1
         global_step += 1
-        if (batch_idx >= orig_len_train_dataloader-5):
-            continue
+        # if (batch_idx >= orig_len_train_dataloader-5):
+        #     continue
         batch = next(train_loader)
         x, y, mWh, dsid, w, MC_w, mH = batch.values()
         # batch['train_wts']
@@ -274,37 +273,39 @@ for epoch in range(num_epochs):
         outputs = model(x)
         # assert(False)
         loss = criterion(outputs, y, w, config['wandb'], mWh, mH)
-        train_loss_epoch += loss.item()
+        train_loss_epoch += loss.item() * w.sum().item()
         sum_weights_epoch += w.sum().item()
         
         loss.backward()
         optimizer.step()
         
         # Update training metrics
+        total_train_samples_processed += len(y)
         train_metrics.update(outputs, y.argmax(dim=-1), w, mWh, dsid, mH)
         train_metrics_MCWts.update(outputs, y.argmax(dim=-1), MC_w, mWh, dsid, mH)
-        print_every_steps = 100000
-        if (n_step % 100000) == (print_every_steps-1):
+        print_every_steps = 100
+        if (n_step % print_every_steps) == (print_every_steps-1):
             print('[%d/%d][%d/%d]\tLoss_C: %.4e' %(epoch, num_epochs, n_step, orig_len_train_dataloader, loss.item()))
             # Log training metrics every log_interval batches
         if ((batch_idx % log_interval) == 0):
+            current_lr = optimizer.param_groups[0]['lr']
+            if config['wandb']:
+                wandb.log({"train/lr": current_lr}, commit=False)
+                wandb.log({"train_samps_processed": total_train_samples_processed}, commit=False)
             log_level = 2 if ((batch_idx % longer_log_interval) == (longer_log_interval-1)) else 0
-            train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'])
-            train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'])
+            train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'], commit=False)
+            train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'], commit=True)
             train_metrics.reset_starts(ks=['sig_sel'])
             train_metrics_MCWts.reset_starts(ks=['sig_sel'])
             # Log learning rate
-            current_lr = optimizer.param_groups[0]['lr']
-            if config['wandb']:
-                wandb.log({"train/lr": current_lr}, step=global_step)
         
     if config['wandb']:
         log_level = 3
         wandb.log({'train/loss_total':train_loss_epoch/sum_weights_epoch}, commit=False)
         train_metrics.reset_starts()
-        train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'])
+        train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'], commit=False)
         train_metrics_MCWts.reset_starts()
-        train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'])
+        train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'], commit=True)
         # Log learning rate
         current_lr = optimizer.param_groups[0]['lr']
         wandb.log({"train/lr": current_lr}, step=global_step)
@@ -333,21 +334,21 @@ for epoch in range(num_epochs):
             wt_sum = 0
             for batch_idx in range(orig_len_val_dataloader):
                 batch = next(val_loader)
-                if (batch_idx >= orig_len_val_dataloader-5):
-                    continue
+                # if (batch_idx >= orig_len_val_dataloader-5):
+                #     continue
 
                 x, y, mWh, dsid, w, MC_w, mH = batch.values()
                 # x, y, w, mWh, dsid = x.to(device), y.to(device), w.to(device), mWh.to(device), dsid.to(device)
             
                 outputs = model(x)
-                loss += criterion(outputs, y, w, config['wandb'], mWh, mH).sum()
+                loss += criterion(outputs, y, w, config['wandb'], mWh, mH).sum() * w.sum()
                 wt_sum += w.sum()
                 val_metrics.update(outputs, y.argmax(dim=-1), w, mWh, dsid, mH)
                 val_metrics_MCWts.update(outputs, y.argmax(dim=-1), MC_w, mWh, dsid, mH)
                 # print('[%d/%d][%d/%d] Val' %(epoch, num_epochs, batch_idx, orig_len_val_dataloader))
             if config['wandb']:
                 wandb.log({
-                    "val/loss_total": loss.item()/wt_sum.item(),
+                    "val/loss_total": loss.item(),
                     "val/loss_ce": loss.item()/wt_sum.item(),
                     # "loss/qq_mass": qq_mass_loss.item(),
                     # "loss/lv_mass": lv_mass_loss.item()
@@ -357,8 +358,8 @@ for epoch in range(num_epochs):
         # Log validation metrics
         if config['wandb']:
             log_level = 3
-            val_metrics.compute_and_log(epoch, prefix="val", step=global_step, log_level=log_level, save=config['wandb'])
-            val_metrics_MCWts.compute_and_log(epoch, prefix="val_MC", step=global_step, log_level=log_level, save=config['wandb'])
+            val_metrics.compute_and_log(epoch, prefix="val", step=global_step, log_level=log_level, save=config['wandb'], commit=False)
+            val_metrics_MCWts.compute_and_log(epoch, prefix="val_MC", step=global_step, log_level=log_level, save=config['wandb'], commit=True)
 
     
     # Log model gradients and parameters
