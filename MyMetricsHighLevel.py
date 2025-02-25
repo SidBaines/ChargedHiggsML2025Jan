@@ -4,6 +4,7 @@ import wandb
 from matplotlib import pyplot as plt
 import numpy as np
 from sklearn.metrics import roc_curve
+from utils import weighted_correlation
 
 def init_wandb(config):
     wandb.init(
@@ -54,8 +55,9 @@ class HEPMetrics:
         self.all_probs = np.zeros((self.max_buffer_len, self.num_classes))
         self.all_targets = np.zeros(self.max_buffer_len)
         self.all_weights = np.zeros(self.max_buffer_len)
-        self.all_dsids = np.zeros(self.max_buffer_len)  # to track dsid for each sample
+        self.all_dsids = np.zeros(self.max_buffer_len).astype(int)  # to track dsid for each sample
         self.all_mHs = np.zeros(self.max_buffer_len)  # to track dsid for each sample
+        self.all_mWhs = np.zeros(self.max_buffer_len)  # to track dsid for each sample
         self.processed_weight_sums_per_dsid = {}  # to track weight sums per dsid
         self.current_update_point = 0
         self.starts = {
@@ -82,12 +84,12 @@ class HEPMetrics:
             dsid: Tensor of shape [batch_size] with dsid for each sample
         """
         # Convert to probabilities if needed
-        if (preds.sum(dim=-1).mean() != 1):  # If logits are passed
+        if (abs(preds.sum(dim=-1).mean().item()-1)>0.0001):  # If logits are passed
             probs = F.softmax(preds, dim=1)
         else:
             probs = preds
         n_batch = len(targets)
-        assert(n_batch < self.max_buffer_len)
+        assert(n_batch <= self.max_buffer_len)
         if (self.current_update_point + n_batch) > self.max_buffer_len:
             self.current_update_point = 0 # Have to restart
             self.reset_starts()
@@ -95,18 +97,19 @@ class HEPMetrics:
         self.all_probs[self.current_update_point:self.current_update_point+n_batch] = probs.cpu().detach().numpy()
         self.all_targets[self.current_update_point:self.current_update_point+n_batch] = targets.cpu().detach().numpy()
         self.all_weights[self.current_update_point:self.current_update_point+n_batch] = weights.cpu().detach().numpy()
-        self.all_dsids[self.current_update_point:self.current_update_point+n_batch] = dsid.cpu().detach().numpy()
+        self.all_dsids[self.current_update_point:self.current_update_point+n_batch] = dsid.cpu().to(int).detach().numpy()
         self.all_mHs[self.current_update_point:self.current_update_point+n_batch] = mH.cpu().detach().numpy()
+        self.all_mWhs[self.current_update_point:self.current_update_point+n_batch] = mWh.cpu().detach().numpy()
 
         # Update weight sums per dsid
         unique_dsid = dsid.cpu().unique()
         for d in unique_dsid:
             if d.item() not in self.processed_weight_sums_per_dsid:
-                self.processed_weight_sums_per_dsid[d.item()] = 0.0
-            self.processed_weight_sums_per_dsid[d.item()] += weights[dsid == d].sum().item()
+                self.processed_weight_sums_per_dsid[int(d.item())] = 0.0
+            self.processed_weight_sums_per_dsid[int(d.item())] += weights[dsid == d].sum().item()
         self.current_update_point += n_batch
 
-    def compute_and_log(self, epoch, prefix="val", step=None, log_level=0, save=True):
+    def compute_and_log(self, epoch, prefix="val", step=None, log_level=0, save=True, commit=None):
         # print("Accuracy calculated: ", self.accuracy.compute())
         if log_level > -1:
             accuracies = self.compute_accuracy()
@@ -130,7 +133,7 @@ class HEPMetrics:
                 })
             self.starts['sig_sel'] = self.current_update_point
         if save:
-            wandb.log({**metrics, "epoch": epoch, "step":step})
+            wandb.log({**metrics, "epoch": epoch, "step":step}, commit=commit)
         else:
             print(metrics)
         return metrics
@@ -191,7 +194,7 @@ class HEPMetrics:
         auc_scores[self.channel] = auc
         return auc_scores
     
-    def compute_signal_selection_metrics(self):
+    def compute_signal_selection_metrics(self, min_mass=0):
         assert(self.starts['sig_sel']==0) # We need to start at 0 here because otherwise the processed sums won't match
         if not len(self.all_probs):
             return {}
@@ -200,6 +203,8 @@ class HEPMetrics:
         bkg_mask = (self.all_targets == 0)[self.starts['sig_sel']:self.current_update_point].astype(float)
         sig_mask = (self.all_targets == 1)[self.starts['sig_sel']:self.current_update_point].astype(float)
         
+        min_mass_mask = (self.all_mWhs>=min_mass)[self.starts['sig_sel']:self.current_update_point]
+
         # Initialize results dictionary
         results = {}
 
@@ -215,7 +220,7 @@ class HEPMetrics:
             mH_mask = ((self.all_mHs >= mH_lower) & (self.all_mHs <= mH_upper))[self.starts['sig_sel']:self.current_update_point].astype(float)
             for max_bkg_level in self.max_bkg_levels:
                 # Calculate the threshold for lvbb background
-                cum_weights = np.cumsum((self.all_weights[self.starts['sig_sel']:self.current_update_point] * weight_mult_factors * mH_mask * bkg_mask)[sort_idx], axis=0)
+                cum_weights = np.cumsum((self.all_weights[self.starts['sig_sel']:self.current_update_point] * weight_mult_factors * mH_mask * bkg_mask * min_mass_mask)[sort_idx], axis=0)
 
                 if cum_weights[-1]<max_bkg_level:
                     thresh = 1.0
@@ -235,7 +240,7 @@ class HEPMetrics:
                         #     weight_scale_up_factor = 0
                     else:
                         weight_scale_up_factor = 0
-                    selected = (above_thresh * mH_mask)
+                    selected = (above_thresh * mH_mask * min_mass_mask)
 
                     results[(max_bkg_level, signal_dsid, (mH_lower, mH_upper))] = {
                         f'{self.channel}_bkg_threshold': thresh,
@@ -245,10 +250,11 @@ class HEPMetrics:
 
 # Modified loss class with wandb logging
 class HEPLoss(torch.nn.Module):
-    def __init__(self, weight_by_mH=False, alpha=0.1, target_mass=125):
+    def __init__(self, weight_by_mH=False, alpha=1.0, target_mass=125, apply_correlation_penalty=False):
         super().__init__()
         self.ce = torch.nn.CrossEntropyLoss(reduction='none')
         self.weight_by_mH = weight_by_mH
+        self.apply_correlation_penalty = apply_correlation_penalty
         self.alpha = alpha
         self.target_mass = target_mass
         
@@ -257,19 +263,27 @@ class HEPLoss(torch.nn.Module):
             weights *= self.scale_loss_by_mH(mHs)
         ce_loss = self.ce(inputs, targets) * weights
         
+        bkg=targets.argmax(dim=-1)==0
+        # correlation_loss = 1 - self.alpha * weighted_correlation(1-inputs[bkg,0], (inputs[bkg,1]>inputs[bkg,2])*masses_lv[bkg] + (inputs[bkg,1]<=inputs[bkg,2])*masses_qq[bkg], weights[bkg]) ** 2
+        correlation_loss = weighted_correlation(1-inputs[bkg,0], mWh[bkg], weights[bkg]) ** 2
+
+
         # Mass regularization
         # qq_mass_loss = (masses_qq[targets==2] - self.target_mass).pow(2).mean()
         # lv_mass_loss = (masses_lv[targets==1] - self.target_mass).pow(2).mean()
         
         # total_loss = ce_loss.mean() + self.alpha * (qq_mass_loss + lv_mass_loss)
-        total_loss = (ce_loss.sum())/(weights.sum())
+        if self.apply_correlation_penalty:
+            total_loss = (ce_loss.sum())/(weights.sum()) + self.alpha * correlation_loss
+        else:
+            total_loss = (ce_loss.sum())/(weights.sum())
         
         # Log individual loss components
         if log:
             wandb.log({
-                "loss/total": total_loss.item(),
-                # "loss/ce": ce_loss.mean().item(),
-                # "loss/qq_mass": qq_mass_loss.item(),
+                "loss/total": (ce_loss.sum())/(weights.sum()).item(),
+                "loss/total_withCorrelation": (total_loss+ self.alpha * correlation_loss).item(),
+                "loss/correlation": correlation_loss.item(),
                 # "loss/lv_mass": lv_mass_loss.item()
             }, commit=False)
         

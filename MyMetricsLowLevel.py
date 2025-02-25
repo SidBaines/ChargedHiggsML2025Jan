@@ -4,6 +4,7 @@ import wandb
 from matplotlib import pyplot as plt
 import numpy as np
 from sklearn.metrics import roc_curve
+from utils import weighted_correlation
 
 def init_wandb(config):
     wandb.init(
@@ -55,6 +56,8 @@ class HEPMetrics:
         self.all_weights = np.zeros(self.max_buffer_len)
         self.all_dsids = np.zeros(self.max_buffer_len)  # to track dsid for each sample
         self.all_mHs = np.zeros(self.max_buffer_len)  # to track dsid for each sample
+        self.all_mWh_lvbb = np.zeros(self.max_buffer_len)  # to track dsid for each sample
+        self.all_mWh_qqbb = np.zeros(self.max_buffer_len)  # to track dsid for each sample
         self.processed_weight_sums_per_dsid = {}  # to track weight sums per dsid
         self.current_update_point = 0
         self.starts = {
@@ -81,12 +84,13 @@ class HEPMetrics:
             dsid: Tensor of shape [batch_size] with dsid for each sample
         """
         # Convert to probabilities if needed
-        if (preds.sum(dim=-1).mean() != 1):  # If logits are passed
+        if (abs(preds.sum(dim=-1).mean().item()-1)>0.0001):  # If logits are passed
+            # print('Softmaxing TEST REMOVE THIS PRINT STATEMENT')
             probs = F.softmax(preds, dim=1)
         else:
             probs = preds
         n_batch = len(targets)
-        assert(n_batch < self.max_buffer_len)
+        assert(n_batch <= self.max_buffer_len)
         if (self.current_update_point + n_batch) > self.max_buffer_len:
             self.current_update_point = 0 # Have to restart
             self.reset_starts()
@@ -96,6 +100,8 @@ class HEPMetrics:
         self.all_weights[self.current_update_point:self.current_update_point+n_batch] = weights.cpu().detach().numpy()
         self.all_dsids[self.current_update_point:self.current_update_point+n_batch] = dsid.cpu().detach().numpy()
         self.all_mHs[self.current_update_point:self.current_update_point+n_batch] = mH.cpu().detach().numpy()
+        self.all_mWh_lvbb[self.current_update_point:self.current_update_point+n_batch] = masses_lv.cpu().detach().numpy()
+        self.all_mWh_qqbb[self.current_update_point:self.current_update_point+n_batch] = masses_qq.cpu().detach().numpy()
 
         # Update weight sums per dsid
         unique_dsid = dsid.cpu().unique()
@@ -159,8 +165,8 @@ class HEPMetrics:
         correct = (pred_classes == self.all_targets[self.starts['accuracy']:self.current_update_point])
         for class_idx in range(1, self.num_classes):
             # Get probabilities for this class
-            class_probs = self.all_probs[self.starts['auc']:self.current_update_point, class_idx]
-            other_sig_probs = self.all_probs[self.starts['auc']:self.current_update_point, self.num_classes - class_idx]
+            class_probs = self.all_probs[self.starts['accuracy']:self.current_update_point, class_idx]
+            other_sig_probs = self.all_probs[self.starts['accuracy']:self.current_update_point, self.num_classes - class_idx]
             this_sig_sel = class_probs > other_sig_probs
             weighted_correct = correct * self.all_weights[self.starts['accuracy']:self.current_update_point] * this_sig_sel
             total_correct = weighted_correct.sum().item()
@@ -182,6 +188,26 @@ class HEPMetrics:
                 accs[f'_{self.DSID_MASS_MAPPING[signal_dsid]}'] = total_correct / total_weight
             else:
                 accs[f'_{self.DSID_MASS_MAPPING[signal_dsid]}'] = 0
+        
+
+
+        bkg_dsids = (self.all_dsids[self.starts['accuracy']:self.current_update_point] < 500000) | (self.all_dsids[self.starts['accuracy']:self.current_update_point] > 600000)
+        for signal_dsid in self.DSID_MASS_MAPPING.keys():
+            for class_idx in range(1, self.num_classes):
+                class_probs = self.all_probs[self.starts['accuracy']:self.current_update_point, class_idx]
+                other_sig_probs = self.all_probs[self.starts['accuracy']:self.current_update_point, self.num_classes - class_idx]
+                this_sig_sel = class_probs > other_sig_probs
+
+                dsid_sel = (self.all_dsids[self.starts['accuracy']:self.current_update_point] == signal_dsid) | bkg_dsids
+                pred_classes = np.argmax(self.all_probs[self.starts['accuracy']:self.current_update_point], axis=1)
+                correct = (pred_classes == self.all_targets[self.starts['accuracy']:self.current_update_point]) * dsid_sel
+                weighted_correct = correct * self.all_weights[self.starts['accuracy']:self.current_update_point] * dsid_sel * this_sig_sel
+                total_correct = weighted_correct.sum().item()
+                total_weight = (self.all_weights[self.starts['accuracy']:self.current_update_point] * dsid_sel * this_sig_sel).sum().item()
+                if total_weight != 0:
+                    accs[f'_{self.DSID_MASS_MAPPING[signal_dsid]}_{self.class_labels[class_idx]}'] = total_correct / total_weight
+                else:
+                    accs[f'_{self.DSID_MASS_MAPPING[signal_dsid]}_{self.class_labels[class_idx]}'] = 0
         return accs
     
     def compute_auc(self):
@@ -214,7 +240,7 @@ class HEPMetrics:
             auc_scores[self.class_labels[class_idx]] = auc
         return auc_scores
     
-    def compute_signal_selection_metrics(self):
+    def compute_signal_selection_metrics(self, min_mass=0):
         assert(self.starts['sig_sel']==0) # We need to start at 0 here because otherwise the processed sums won't match
         if not len(self.all_probs):
             return {}
@@ -230,8 +256,13 @@ class HEPMetrics:
         # Set up some stuff that we only want to do once if possible
         # weight_mult_factors = np.array([self.total_weights_per_dsid[dsid.item()]/self.processed_weight_sums_per_dsid[dsid.item()] for dsid in self.all_dsids[self.starts['sig_sel']:self.current_update_point]])
         weight_mult_factors = np.array([self.total_weights_per_dsid[dsid.item()]/self.processed_weight_sums_per_dsid[dsid.item()] if self.processed_weight_sums_per_dsid[dsid.item()]!=0 else 0 for dsid in self.all_dsids[self.starts['sig_sel']:self.current_update_point]])
-        lvbb_over_qqbb = (self.all_probs[:, 1] >= self.all_probs[:, 2])[self.starts['sig_sel']:self.current_update_point].astype(float)
-        qqbb_over_lvbb = (self.all_probs[:, 2] >= self.all_probs[:, 1])[self.starts['sig_sel']:self.current_update_point].astype(float)
+        if 1: # The original
+            lvbb_over_qqbb = (self.all_probs[:, 1] >= self.all_probs[:, 2])[self.starts['sig_sel']:self.current_update_point].astype(float)
+            qqbb_over_lvbb = (self.all_probs[:, 2] >= self.all_probs[:, 1])[self.starts['sig_sel']:self.current_update_point].astype(float)
+        else:
+            print("WARNING: HACK PUT IN TO TEST THRESHOLDS IF WE REQUIRE THE MWH TO BE ABOVE A CERTAIN CUTOFF VALUE")
+            lvbb_over_qqbb = ((self.all_probs[:, 1] >= self.all_probs[:, 2]) & (self.all_mWh_lvbb>=min_mass))[self.starts['sig_sel']:self.current_update_point].astype(float)
+            qqbb_over_lvbb = ((self.all_probs[:, 2] >= self.all_probs[:, 1]) & (self.all_mWh_qqbb>=min_mass))[self.starts['sig_sel']:self.current_update_point].astype(float)
         # TODO Do we want to sort the vectors (only those used by, and only to be used for, the threshold calculation stuff) here? Or keep doing it all together later. Basically might help with speed
         sort_idx = np.argsort(self.all_probs[self.starts['sig_sel']:self.current_update_point, 0])
         sorted_probs_bkg = self.all_probs[self.starts['sig_sel']:self.current_update_point][sort_idx, 0]
@@ -309,31 +340,41 @@ print(cum_weights3[np.searchsorted(cum_weights3, max_bkg_level)])
 
 # Modified loss class with wandb logging
 class HEPLoss(torch.nn.Module):
-    def __init__(self, weight_by_mH=False, alpha=0.1, target_mass=125):
+    def __init__(self, weight_by_mH=False, alpha=1.0, target_mass=125, apply_correlation_penalty=False):
         super().__init__()
         self.ce = torch.nn.CrossEntropyLoss(reduction='none')
         self.weight_by_mH = weight_by_mH
         self.alpha = alpha
         self.target_mass = target_mass
+        self.apply_correlation_penalty = apply_correlation_penalty
         
     def forward(self, inputs, targets, weights, log, masses_qq, masses_lv, mHs):
         if self.weight_by_mH:
             weights *= self.scale_loss_by_mH(mHs)
+        
         ce_loss = self.ce(inputs, targets) * weights
+        
+        bkg=targets.argmax(dim=-1)==0
+        # correlation_loss = 1 - self.alpha * weighted_correlation(1-inputs[bkg,0], (inputs[bkg,1]>inputs[bkg,2])*masses_lv[bkg] + (inputs[bkg,1]<=inputs[bkg,2])*masses_qq[bkg], weights[bkg]) ** 2
+        correlation_loss = weighted_correlation(1-inputs[bkg,0], (inputs[bkg,1]>inputs[bkg,2])*masses_lv[bkg] + (inputs[bkg,1]<=inputs[bkg,2])*masses_qq[bkg], weights[bkg]) ** 2
+
         
         # Mass regularization
         # qq_mass_loss = (masses_qq[targets==2] - self.target_mass).pow(2).mean()
         # lv_mass_loss = (masses_lv[targets==1] - self.target_mass).pow(2).mean()
         
         # total_loss = ce_loss.mean() + self.alpha * (qq_mass_loss + lv_mass_loss)
-        total_loss = (ce_loss.sum())/(weights.sum())
+        if self.apply_correlation_penalty:
+            total_loss = (ce_loss.sum())/(weights.sum()) + self.alpha * correlation_loss
+        else:
+            total_loss = (ce_loss.sum())/(weights.sum())
         
         # Log individual loss components
         if log:
             wandb.log({
-                "loss/total": total_loss.item(),
-                # "loss/ce": ce_loss.mean().item(),
-                # "loss/qq_mass": qq_mass_loss.item(),
+                "loss/total": (ce_loss.sum())/(weights.sum()).item(),
+                "loss/total_withCorrelation": (total_loss + self.alpha * correlation_loss).item(),
+                "loss/correlation": correlation_loss.item(),
                 # "loss/lv_mass": lv_mass_loss.item()
             }, commit=False)
         

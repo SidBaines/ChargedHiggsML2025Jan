@@ -230,7 +230,7 @@ if config['wandb']:
     init_wandb(config)
     # wandb.watch(model, log_freq=100)
 
-criterion = HEPLoss()
+criterion = HEPLoss(apply_correlation_penalty=True, alpha=1.0)
 train_metrics = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
 val_metrics = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=val_dataloader.abs_weight_sums, signal_acceptance_levels=[1000, 5000])
 train_metrics_MCWts = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
