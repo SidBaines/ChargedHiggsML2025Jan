@@ -170,12 +170,10 @@ class ProportionalMemoryMappedDataset:
                 self.current_indices[dsid] = list(range(floor((1-self.train_split)*self.sample_counts[dsid])))
             if self.shuffle_batch:
                 random.shuffle(self.current_indices[dsid])
+        self.total_samples = sum([len(self.current_indices[dsid]) for dsid in self.current_indices.keys()])
     
     def get_total_samples(self):
-        if self.is_train:
-            return sum([len(self.memmaps[dsid]) for dsid in self.memmaps.keys()]) * (self.train_split)
-        else:
-            return sum([len(self.memmaps[dsid]) for dsid in self.memmaps.keys()]) * (1-self.train_split)
+        return self.total_samples
     
     def __iter__(self):
         return self
@@ -312,6 +310,19 @@ class ProportionalMemoryMappedDataset:
                 inds = torch.randperm(x.size(1))
                 x = x[:,inds]
                 types = types[:,inds]
+        else:
+            # Switch neutrino and lepton, then otherwise leave. 
+            # This is so that it can be used consistently with the case where we trained when shuffled
+            # and still want it to work when applied to not-shuffled
+            # Probably not the most efficient but it's probably fiiiiiine
+            batch_size = x.size(0)
+            num_objs = x.size(1)
+            switched_inds = torch.arange(num_objs).to(torch.long)
+            switched_inds[1]=0
+            switched_inds[0]=1
+            inds = einops.repeat(switched_inds, 'object -> batch object', batch=batch_size)
+            x=torch.gather(x,1,einops.repeat(inds, 'b o -> b o v',v=x.size(-1)))
+            types=torch.gather(types,1,inds)
 
 
         if self.device == 'cuda':

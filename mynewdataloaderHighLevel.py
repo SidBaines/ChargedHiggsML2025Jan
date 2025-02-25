@@ -131,12 +131,10 @@ class ProportionalMemoryMappedDatasetHighLevel:
                 self.current_indices[dsid] = list(range(floor((1-self.train_split)*self.sample_counts[dsid])))
             if self.shuffle_batch:
                 random.shuffle(self.current_indices[dsid])
+        self.total_samples = sum([len(self.current_indices[dsid]) for dsid in self.current_indices.keys()])
     
     def get_total_samples(self):
-        if self.is_train:
-            return sum([len(self.memmaps[dsid]) for dsid in self.memmaps.keys()]) * (self.train_split)
-        else:
-            return sum([len(self.memmaps[dsid]) for dsid in self.memmaps.keys()]) * (1-self.train_split)
+        return self.total_samples
     
     
     def __iter__(self):
