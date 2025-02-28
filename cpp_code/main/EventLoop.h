@@ -38,6 +38,8 @@ struct Particle {
     TLorentzVector p4;
     int type;  // 0: electron, 1: muon, 2: neutrino, 3: ljet, 4: sjet
     float tagInfo;  // Tagging score (0 for electron/muon/neutrino)
+    int recoInclusion;  // 0: Not included in the reconstructed charged Higgs, 1: incldued as part of SM higgs from H+, 2: included as part of Wqq, 3: included as part of Wlv (this will indeed just be the lepton and neutrino)
+    int trueInclusion;  // 0: Not included in the     true      charged Higgs, 1: incldued as part of SM higgs from H+, 2: included as part of Wqq, 3: included as part of Wlv (this will indeed just be the lepton and neutrino)
 };
 
 class EventLoop {
@@ -299,8 +301,9 @@ public :
 
    // Extra variables for output to the output TTree
    std::vector<float> ll_particle_px, ll_particle_py, ll_particle_pz, ll_particle_e, ll_particle_tagInfo;
-   std::vector<int> ll_particle_type;
+   std::vector<int> ll_particle_type, ll_particle_recoInclusion, ll_particle_trueInclusion;
    int truth_decay_mode, lepton_count;
+   int truth_decay_mode_old;
    float best_mWH_lvbb, best_mWH_qqbb, best_mH, best_mWqq, best_mWlv;
    Float_t         Lepton_Eta;
    Float_t         Lepton_Pt;
@@ -382,6 +385,7 @@ public :
    // Useful vars for the low-level variable stuff:
    std::vector<Particle> particles;
    TLorentzVector ll_truth_Higgs, ll_truth_W, ll_truth_W_reco;
+   TLorentzVector ll_truth_Higgs_old, ll_truth_W_old, ll_truth_W_reco_old;
 
    // Other vars:
    TString processName;
@@ -794,6 +798,8 @@ public :
    virtual bool     LowLevel_Loop();
    virtual int      LowLevel_CountLeptons();
    virtual int      LowLevel_ClassifyDecayType();
+   virtual int      LowLevel_ClassifyDecayType_OLD();
+   virtual void LowLevel_MatchTruthParticles();
    virtual std::tuple<float, float, float> LowLevel_GetBestWhMasses();
    virtual void     Fill_NN_Scores();
    // Chi2_minimization *myMinimizer = new Chi2_minimization("MeV"); // unused
@@ -1570,7 +1576,10 @@ EventLoop::EventLoop(TTree *tree, TString ExpUncertaintyName, TString outFileNam
    output_tree->Branch("ll_particle_e", &ll_particle_e);
    output_tree->Branch("ll_particle_type", &ll_particle_type);
    output_tree->Branch("ll_particle_tagInfo", &ll_particle_tagInfo);
+   output_tree->Branch("ll_particle_recoInclusion", &ll_particle_recoInclusion);
+   output_tree->Branch("ll_particle_trueInclusion", &ll_particle_trueInclusion);
    output_tree->Branch("ll_truth_decay_mode", &truth_decay_mode);
+   output_tree->Branch("ll_truth_decay_mode_old", &truth_decay_mode_old);
    output_tree->Branch("ll_best_mH", &best_mH);
    output_tree->Branch("ll_best_mWqq", &best_mWqq);
    output_tree->Branch("ll_best_mWlv", &best_mWlv);

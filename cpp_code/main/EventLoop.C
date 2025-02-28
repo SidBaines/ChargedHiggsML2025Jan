@@ -11,6 +11,202 @@ Comments from Dominik
         //Exclusively outside the higgs or W
 */
 
+
+int EventLoop::LowLevel_ClassifyDecayType_OLD(){
+    const double W_MASS = 80.379e3; // GeV to MeV
+    const double W_MASS_WINDOW = 5.0e3; // GeV to MeV
+    // Check if truth information exists
+    if (truth_pt->empty() || truth_eta->empty() || truth_phi->empty() || 
+        truth_m->empty() || truth_pdgid->empty()) {
+        return -3;
+    }
+
+    // Create vectors to store particle information
+    std::vector<TLorentzVector> tparticleP4;
+    std::vector<int> pdgIds;
+    // Fill vectors with truth information
+    for (size_t i = 0; i < truth_pt->size(); i++) {
+        TLorentzVector p4;
+        p4.SetPtEtaPhiM(truth_pt->at(i), truth_eta->at(i), 
+                        truth_phi->at(i), truth_m->at(i));
+        tparticleP4.push_back(p4);
+        pdgIds.push_back(truth_pdgid->at(i));
+    }
+
+    if (false){ // Testing 15/01/25
+        for (size_t i = 0; i < pdgIds.size(); i++) {
+            if (pdgIds[i] == 24) {
+                std::cout << "TRUTH W+ : (" << tparticleP4[i].Pt() << ", " << tparticleP4[i].Eta() << ", " << tparticleP4[i].Phi() << ", " << tparticleP4[i].M() << std::endl;
+            }
+            if (pdgIds[i] == -24) {
+                std::cout << "TRUTH W- : (" << tparticleP4[i].Pt() << ", " << tparticleP4[i].Eta() << ", " << tparticleP4[i].Phi() << ", " << tparticleP4[i].M() << std::endl;
+            }
+        }
+    }
+
+    // Find charged Higgs (pdgId = ±37)
+    int chHiggsIdx = -1;
+    TLorentzVector chHiggsP4;
+    for (size_t i = 0; i < pdgIds.size(); i++) {
+        if (abs(pdgIds[i]) == 37) {
+            chHiggsIdx = i;
+            chHiggsP4 = tparticleP4[i];
+            break;
+        }
+    }
+    if (chHiggsIdx == -1) return -4;
+    // Find SM Higgs (pdgId = 25)
+    int smHiggsIdx = -1;
+    TLorentzVector smHiggsP4;
+    for (size_t i = 0; i < pdgIds.size(); i++) {
+        if (pdgIds[i] == 25) {
+            smHiggsIdx = i;
+            smHiggsP4 = tparticleP4[i];
+            break;
+        }
+    }
+    if (smHiggsIdx == -1) return -5;
+    ll_truth_Higgs_old.SetPtEtaPhiM(smHiggsP4.Pt(), smHiggsP4.Eta(), smHiggsP4.Phi(), smHiggsP4.M());
+    // Check for b-quark pair from Higgs decay
+    bool foundBPair = false;
+    int bCount = 0;
+    for (int pdgId : pdgIds) {
+        if (abs(pdgId) == 5) bCount++;
+    }
+    if (bCount >= 2) foundBPair = true;
+    if (!foundBPair) return -6;
+    // truth_Higgs_reco = ???;
+    // Find W boson that best reconstructs charged Higgs when combined with SM Higgs
+    double bestDeltaM = 1e12;
+    int bestWIdx = -1;
+    TLorentzVector bestWP4;
+    for (size_t i = 0; i < pdgIds.size(); i++) {
+        // if (abs(pdgIds[i]) == 24) {
+        if (pdgIds[i] == 24) {
+            double deltaM = abs((tparticleP4[i] + smHiggsP4).M() - chHiggsP4.M());
+            if (deltaM < bestDeltaM) {
+                bestDeltaM = deltaM;
+                bestWIdx = i;
+                bestWP4 = tparticleP4[i];
+            }
+        }
+    }
+    if (bestWIdx == -1) return -7;
+    ll_truth_W_old.SetPtEtaPhiM(bestWP4.Pt(), bestWP4.Eta(), bestWP4.Phi(), bestWP4.M());
+    int decay_type = 0;
+    int lepton_idx = -1;
+    if (false){ // Old version, doesn't account for 2 lepton case
+        // First find the lepton
+        for(size_t i = 0; i < truth_pdgid->size(); i++) {
+            int pdgid = (*truth_pdgid)[i];
+            // Check for electron (11) or muon (13)
+            if(abs(pdgid) == 11 || abs(pdgid) == 13) {
+                lepton_idx = i;
+                // Set decay type based on charge (negative pdgid = positive particle)
+                decay_type = (pdgid > 0) ? 2 : 1;
+                break;
+            }
+        }
+    } else{ // New version, checks for which truth lepton most closely matches the event-level lepton
+        // First find the lepton
+        float min_delta_R = -1;
+        for(size_t i = 0; i < truth_pdgid->size(); i++) {
+            int pdgid = (*truth_pdgid)[i];
+            // Check for electron (11) or muon (13)
+            if(abs(pdgid) == 11 || abs(pdgid) == 13) {
+                if ((min_delta_R==-1) || (particles.at(0).p4.DeltaR(tparticleP4.at(i))) < min_delta_R){
+                    lepton_idx = i;
+                    min_delta_R = (particles.at(0).p4.DeltaR(tparticleP4.at(i)));
+                    // Set decay type based on charge (negative pdgid = positive particle)
+                    decay_type = (pdgid > 0) ? 2 : 1;
+                }
+            }
+        }
+    }
+    if(lepton_idx == -1) return -8; // No lepton found
+    // Create lepton TLorentzVector
+    TLorentzVector lepton;
+    lepton.SetPtEtaPhiM((*truth_pt)[lepton_idx],
+                        (*truth_eta)[lepton_idx],
+                        (*truth_phi)[lepton_idx],
+                        (*truth_m)[lepton_idx]);
+    if(decay_type == 1) {
+        // Look for corresponding neutrino
+        int target_nu_pdgid;
+        if(abs((*truth_pdgid)[lepton_idx]) == 11) {
+            target_nu_pdgid = 12; // electron neutrino
+        } else {
+            target_nu_pdgid = 14; // muon neutrino
+        }
+        
+        int nu_idx = -1;
+        for(size_t i = 0; i < truth_pdgid->size(); i++) {
+            if((*truth_pdgid)[i] == target_nu_pdgid) {
+                nu_idx = i;
+                break;
+            }
+        }
+        if(nu_idx == -1) return -1; // No matching neutrino found
+        // Create neutrino TLorentzVector and sum with lepton
+        TLorentzVector neutrino;
+        neutrino.SetPtEtaPhiM((*truth_pt)[nu_idx],
+                             (*truth_eta)[nu_idx],
+                             (*truth_phi)[nu_idx],
+                             (*truth_m)[nu_idx]);
+        ll_truth_W_reco_old = lepton + neutrino;
+    } else if(decay_type == 2) {
+        // Look for jet pair with mass close to W mass
+        double best_deltaR = 999.0;
+        int best_j1_idx = -1;
+        int best_j2_idx = -1;
+        for(size_t i = 0; i < truth_pdgid->size(); i++) {
+            // Skip if not a jet (assuming jets have pdgid < 7)
+            if(abs((*truth_pdgid)[i]) >= 6) continue;
+            TLorentzVector jet1;
+            jet1.SetPtEtaPhiM((*truth_pt)[i],
+                             (*truth_eta)[i],
+                             (*truth_phi)[i],
+                             (*truth_m)[i]);
+            for(size_t j = i + 1; j < truth_pdgid->size(); j++) {
+                if(abs((*truth_pdgid)[j]) >= 6) continue;
+                TLorentzVector jet2;
+                jet2.SetPtEtaPhiM((*truth_pt)[j],
+                                 (*truth_eta)[j],
+                                 (*truth_phi)[j],
+                                 (*truth_m)[j]);
+                TLorentzVector dijet = jet1 + jet2;
+                double mass_diff = abs(dijet.M() - W_MASS);
+                if(mass_diff < W_MASS_WINDOW) {
+                    double deltaR = dijet.DeltaR(ll_truth_W_old);
+                    if(deltaR < best_deltaR) {
+                        best_deltaR = deltaR;
+                        best_j1_idx = i;
+                        best_j2_idx = j;
+                    }
+                }
+            }
+        }
+        if(best_j1_idx == -1 || best_j2_idx == -1) return -2; // No suitable jet pair found
+        // Reconstruct W from best jet pair
+        TLorentzVector jet1, jet2;
+        jet1.SetPtEtaPhiM((*truth_pt)[best_j1_idx],
+                          (*truth_eta)[best_j1_idx],
+                          (*truth_phi)[best_j1_idx],
+                          (*truth_m)[best_j1_idx]);
+        jet2.SetPtEtaPhiM((*truth_pt)[best_j2_idx],
+                          (*truth_eta)[best_j2_idx],
+                          (*truth_phi)[best_j2_idx],
+                          (*truth_m)[best_j2_idx]);
+        
+        ll_truth_W_reco_old = jet1 + jet2;
+    }
+    for(size_t i = 0; i < truth_pdgid->size(); i++) {
+        if (((*truth_pdgid)[i] == -15) and (decay_type == 1)) return -9; // Tau+ in the event truth-particles so this case is tricky, discount it
+        if (((*truth_pdgid)[i] == -15) and (decay_type == 2)) return -10; // Tau+ in the event truth-particles so this case is tricky, discount it
+    }
+    return decay_type;
+}
+
 void EventLoop::Fill_NN_Scores(){
     // Fill the inputs to the NN
 	m_inputs_lvbb["LepEnergyFrac_lvbb"] = m_LepEnergyFrac_lvbb;
@@ -283,7 +479,114 @@ void EventLoop::Fill_NN_Scores(){
 
 }
 
+void EventLoop::LowLevel_MatchTruthParticles(){
+    // Match the low-level reco objects (elec, muon, neutrino, jets) to whether they appear to come from the H+ -> Wh in the truth level...
+    if (debugMode) std::cout << "\t" << "Entering LowLevel_MatchTruthParticles" << std::endl;
+
+    // First find the reco large-R jet or small-R jets which most closesly match the truth Higgs
+    float delta_R_TruthHiggs = -1;
+    // float delta_M_TruthHiggs = -1;
+    int best_H_ljet_idx = -1, best_H_sjet_idx1 = -1, best_H_sjet_idx2 = -1;
+    int idx_counter = 0;
+    bool best_bb_is_largeR = false;
+    for (const auto &particle : particles) {
+        if ((particle.type == 5)){
+            if (((ll_truth_Higgs.DeltaR(particle.p4)) < delta_R_TruthHiggs) || (delta_R_TruthHiggs==-1)){
+                delta_R_TruthHiggs = ll_truth_Higgs.DeltaR(particle.p4);
+                best_H_ljet_idx = idx_counter;
+                best_bb_is_largeR = true;
+            }
+        }
+        idx_counter++;
+    }
+    if (best_H_ljet_idx == -1){ // No Xbb-tagged jets, so loop through non-Xbb tagged jets and small-jet pairs for H. Shouldn't really use this case but I'll do it anyway since we might want to use later
+        int idx_counter = 0;
+        for (const auto &particle : particles) {
+            if ((particle.type == 3)){
+                if (((ll_truth_Higgs.DeltaR(particle.p4)) < delta_R_TruthHiggs) || (delta_R_TruthHiggs==-1)){
+                    delta_R_TruthHiggs = ll_truth_Higgs.DeltaR(particle.p4);
+                    best_H_ljet_idx = idx_counter;
+                    best_bb_is_largeR = true;
+                }
+            }
+            idx_counter++;
+        }
+        for (int i1=0; i1 < particles.size(); i1++){
+            if (particles[i1].type == 4){
+                for(int i2=i1+1; i2 < particles.size(); i2++){
+                    if (particles[i2].type == 4){
+                            if (((ll_truth_Higgs.DeltaR(particles[i1].p4+particles[i2].p4)) < delta_R_TruthHiggs) || (delta_R_TruthHiggs==-1)){
+                            delta_R_TruthHiggs = ll_truth_Higgs.DeltaR(particles[i1].p4+particles[i2].p4);
+                            best_H_sjet_idx1 = i1;
+                            best_H_sjet_idx2 = i2;
+                            best_bb_is_largeR = false;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if (best_bb_is_largeR){
+        particles[best_H_ljet_idx].trueInclusion = 1;
+    } else{
+        particles[best_H_sjet_idx1].trueInclusion = 1;
+        particles[best_H_sjet_idx2].trueInclusion = 1;
+    }
+
+    // Now the find the reco large-R jet or small-R jets or lep+neutrino combo which most closesly match the truth W, depending on truth decay mode
+    if (truth_decay_mode==1){
+        // Simply set the lepton and neutrino to be on
+        particles.at(0).trueInclusion = 3;
+        particles.at(1).trueInclusion = 3;
+    } else if (truth_decay_mode==2){
+        // w -> qq
+        // First look for large-R jet
+        idx_counter = 0;
+        bool best_Wqq_is_largeR = false;
+        float delta_R_TruthW = -1;
+        int best_W_ljet_idx = -1, best_W_sjet_idx1 = -1, best_W_sjet_idx2 = -1;
+        for (const auto &particle : particles) {
+            if  ((idx_counter!=best_H_ljet_idx) && ((particle.type == 3) || (particle.type == 5))){
+                if (((ll_truth_W.DeltaR(particle.p4)) < delta_R_TruthW) || (delta_R_TruthW==-1)){
+                    delta_R_TruthW = ll_truth_W.DeltaR(particle.p4);
+                    best_W_ljet_idx = idx_counter;
+                    best_Wqq_is_largeR = true;
+                }
+            }
+            idx_counter++;
+        }
+        // Now try with W as pairs of small-R jets
+        for (int i1=0; i1 < particles.size(); i1++){
+            if (particles[i1].type == 4){
+                for(int i2=i1+1; i2 < particles.size(); i2++){
+                    if (particles[i2].type == 4){
+                        if ((i1!=best_H_sjet_idx1) || (i2!=best_H_sjet_idx2)){ // Check we're not overlapping with small-R jet h->bb if that was selected
+                            // if ((abs((particles[i1].p4+particles[i2].p4).M()-80.36e3) < best_W_diff) || (best_W_diff==-1)){
+                            if (((ll_truth_W.DeltaR(particles[i1].p4+particles[i2].p4)) < delta_R_TruthW) || (delta_R_TruthW==-1)){
+                                delta_R_TruthW = ll_truth_W.DeltaR(particles[i1].p4+particles[i2].p4);
+                                best_W_sjet_idx1 = i1;
+                                best_W_sjet_idx2 = i2;
+                                best_Wqq_is_largeR = false;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        if (best_Wqq_is_largeR){
+            particles[best_W_ljet_idx].trueInclusion = 2;
+        } else{
+            particles[best_W_sjet_idx1].trueInclusion = 2;
+            particles[best_W_sjet_idx2].trueInclusion = 2;
+        }
+    } else{ // Should not be able to get here
+        assert((false));
+    }
+    if (debugMode) std::cout << "\t" << "Leaving LowLevel_MatchTruthParticles" << std::endl;
+}
+
 std::tuple<float, float, float> EventLoop::LowLevel_GetBestWhMasses(){
+    if (debugMode) std::cout << "\t" << "Entering LowLevel_GetBestWhMasses" << std::endl;
     TLorentzVector best_H, best_W_lv, best_W_qq;
     float best_qqbb=-1, best_lvbb=-1, best_bb = -1, best_H_diff, best_W_diff;
     int best_H_ljet_idx = -1, best_H_sjet_idx1 = -1, best_H_sjet_idx2 = -1, best_W_ljet_idx = -1, best_W_sjet_idx1 = -1, best_W_sjet_idx2 = -1;
@@ -291,6 +594,7 @@ std::tuple<float, float, float> EventLoop::LowLevel_GetBestWhMasses(){
     best_W_diff = -1; // initialize to -1 so we know it's an error if it is -1 since should be abs(diff)
     // for (const auto &particle : particles) {
     int idx_counter = 0;
+    bool best_bb_is_largeR = false;
     for (const auto &particle : particles) {
         if ((particle.type == 5)){
             if ((abs(particle.p4.M()-125e3) < best_H_diff) || (best_H_diff==-1)){
@@ -298,6 +602,7 @@ std::tuple<float, float, float> EventLoop::LowLevel_GetBestWhMasses(){
                 best_H.SetPtEtaPhiE(particle.p4.Pt(), particle.p4.Eta(), particle.p4.Phi(), particle.p4.E());
                 best_H_ljet_idx = idx_counter;
                 best_bb = best_H.M();
+                best_bb_is_largeR = true;
             }
         }
         idx_counter++;
@@ -311,6 +616,7 @@ std::tuple<float, float, float> EventLoop::LowLevel_GetBestWhMasses(){
                     best_H.SetPtEtaPhiE(particle.p4.Pt(), particle.p4.Eta(), particle.p4.Phi(), particle.p4.E());
                     best_H_ljet_idx = idx_counter;
                     best_bb = best_H.M();
+                    best_bb_is_largeR = true;
                 }
             }
             idx_counter++;
@@ -325,15 +631,23 @@ std::tuple<float, float, float> EventLoop::LowLevel_GetBestWhMasses(){
                             best_H_sjet_idx1 = i1;
                             best_H_sjet_idx2 = i2;
                             best_bb = best_H.M();
+                            best_bb_is_largeR = false;
                         }
                     }
                 }
             }
         }
     }
+    if (best_bb_is_largeR){
+        particles[best_H_ljet_idx].recoInclusion = 1;
+    } else{
+        particles[best_H_sjet_idx1].recoInclusion = 1;
+        particles[best_H_sjet_idx2].recoInclusion = 1;
+    }
 
     // Now find best W indices as a single large-R jet (separate from Higgs) if one exists
     idx_counter = 0;
+    bool best_Wqq_is_largeR = false;
     for (const auto &particle : particles) {
         if  ((idx_counter!=best_H_ljet_idx) && ((particle.type == 3) || (particle.type == 5))){
             // if ((abs(particle.p4.M()-80.36e3) < best_W_diff) || (best_W_diff==-1)){
@@ -342,6 +656,7 @@ std::tuple<float, float, float> EventLoop::LowLevel_GetBestWhMasses(){
                 best_W_diff = particle.p4.Pt();
                 best_W_qq.SetPtEtaPhiE(particle.p4.Pt(), particle.p4.Eta(), particle.p4.Phi(), particle.p4.E());
                 best_W_ljet_idx = idx_counter;
+                best_Wqq_is_largeR = true;
             }
         }
         idx_counter++;
@@ -358,23 +673,34 @@ std::tuple<float, float, float> EventLoop::LowLevel_GetBestWhMasses(){
                             best_W_qq = particles[i1].p4 + particles[i2].p4;
                             best_W_sjet_idx1 = i1;
                             best_W_sjet_idx2 = i2;
+                            best_Wqq_is_largeR = false;
                         }
                     }
                 }
             }
         }
     }
+    if (best_Wqq_is_largeR){
+        particles[best_W_ljet_idx].recoInclusion = 2;
+    } else{
+        particles[best_W_sjet_idx1].recoInclusion = 2;
+        particles[best_W_sjet_idx2].recoInclusion = 2;
+    }
     best_qqbb = (best_H + best_W_qq).M();
     best_mWqq = best_W_qq.M();
 
     TLorentzVector lep, neut;
+    idx_counter = 0;
     for (const auto &particle : particles) {
         if ((particle.type == 0) || (particle.type == 1)){
+            particles[idx_counter].recoInclusion = 3;
             lep = particle.p4;
         }
         if (particle.type==2){
+            particles[idx_counter].recoInclusion = 3;
             neut = particle.p4;
         }
+        idx_counter+=1;
     }
     best_lvbb = (best_H + neut + lep).M();
     best_mWlv = (neut + lep).M();
@@ -388,6 +714,7 @@ std::tuple<float, float, float> EventLoop::LowLevel_GetBestWhMasses(){
         std::cout << "RECO BestWh_lvbb : " << best_lvbb/1e3 << std::endl;
         std::cout << "RECO Best_h_bb : " << best_bb/1e3 << std::endl;
     }
+    if (debugMode) std::cout << "\t" << "Leaving LowLevel_GetBestWhMasses" << std::endl;
     return std::make_tuple(best_bb, best_qqbb, best_lvbb);
 }
 
@@ -436,6 +763,7 @@ int EventLoop::LowLevel_CountLeptons(){
 }
 
 int EventLoop::LowLevel_ClassifyDecayType(){
+    if (debugMode) std::cout << "\t" << "Entering LowLevel_ClassifyDecayType" << std::endl;
     const double W_MASS = 80.379e3; // GeV to MeV
     const double W_MASS_WINDOW = 5.0e3; // GeV to MeV
     // Check if truth information exists
@@ -530,7 +858,7 @@ int EventLoop::LowLevel_ClassifyDecayType(){
                 break;
             }
         }
-    } else{ // New version, checks for which truth lepton most closely matches the event-level lepton
+    } else if (false) { // Newer but still old version, checks for which truth lepton most closely matches the event-level lepton
         // First find the lepton
         float min_delta_R = -1;
         for(size_t i = 0; i < truth_pdgid->size(); i++) {
@@ -545,88 +873,133 @@ int EventLoop::LowLevel_ClassifyDecayType(){
                 }
             }
         }
-    }
-    if(lepton_idx == -1) return -8; // No lepton found
-    // Create lepton TLorentzVector
-    TLorentzVector lepton;
-    lepton.SetPtEtaPhiM((*truth_pt)[lepton_idx],
-                        (*truth_eta)[lepton_idx],
-                        (*truth_phi)[lepton_idx],
-                        (*truth_m)[lepton_idx]);
-    if(decay_type == 1) {
-        // Look for corresponding neutrino
-        int target_nu_pdgid;
-        if(abs((*truth_pdgid)[lepton_idx]) == 11) {
-            target_nu_pdgid = 12; // electron neutrino
-        } else {
-            target_nu_pdgid = 14; // muon neutrino
-        }
-        
-        int nu_idx = -1;
+    } else { // New version, checks the W boson decay by trying to create W from neutrino+lep OR quarks
+        float min_delta_R = -1;
+        // First try with lepton + neutrino pairs
+        if (debugMode) std::cout << "\t" << "Looping over leptons" << std::endl;
         for(size_t i = 0; i < truth_pdgid->size(); i++) {
-            if((*truth_pdgid)[i] == target_nu_pdgid) {
-                nu_idx = i;
-                break;
-            }
-        }
-        if(nu_idx == -1) return -1; // No matching neutrino found
-        // Create neutrino TLorentzVector and sum with lepton
-        TLorentzVector neutrino;
-        neutrino.SetPtEtaPhiM((*truth_pt)[nu_idx],
-                             (*truth_eta)[nu_idx],
-                             (*truth_phi)[nu_idx],
-                             (*truth_m)[nu_idx]);
-        ll_truth_W_reco = lepton + neutrino;
-    } else if(decay_type == 2) {
-        // Look for jet pair with mass close to W mass
-        double best_deltaR = 999.0;
-        int best_j1_idx = -1;
-        int best_j2_idx = -1;
-        for(size_t i = 0; i < truth_pdgid->size(); i++) {
-            // Skip if not a jet (assuming jets have pdgid < 7)
-            if(abs((*truth_pdgid)[i]) >= 6) continue;
-            TLorentzVector jet1;
-            jet1.SetPtEtaPhiM((*truth_pt)[i],
-                             (*truth_eta)[i],
-                             (*truth_phi)[i],
-                             (*truth_m)[i]);
-            for(size_t j = i + 1; j < truth_pdgid->size(); j++) {
-                if(abs((*truth_pdgid)[j]) >= 6) continue;
-                TLorentzVector jet2;
-                jet2.SetPtEtaPhiM((*truth_pt)[j],
-                                 (*truth_eta)[j],
-                                 (*truth_phi)[j],
-                                 (*truth_m)[j]);
-                TLorentzVector dijet = jet1 + jet2;
-                double mass_diff = abs(dijet.M() - W_MASS);
-                if(mass_diff < W_MASS_WINDOW) {
-                    double deltaR = dijet.DeltaR(ll_truth_W);
-                    if(deltaR < best_deltaR) {
-                        best_deltaR = deltaR;
-                        best_j1_idx = i;
-                        best_j2_idx = j;
+            int pdgid = (*truth_pdgid)[i];
+            // Check for electron (11) or muon (13)
+            if(pdgid == -11 || pdgid == -13) {
+                if (debugMode) std::cout << "\t" << "Found lepton with pdgid=" << pdgid << std::endl;
+                for(size_t j = 0; j < truth_pdgid->size(); j++) {
+                    int pdgid2 = (*truth_pdgid)[j];
+                    if(((pdgid==-11)&&(pdgid2==12)) || ((pdgid==-13)&&(pdgid2==14))) {
+                        if (debugMode) std::cout << "\t" << "Found neutrino with pdgid=" << pdgid << std::endl;
+                        if ((ll_truth_W.DeltaR(particleP4.at(i) + particleP4.at(j)) < min_delta_R) || (min_delta_R==-1)){
+                            lepton_idx = i;
+                            min_delta_R = ll_truth_W.DeltaR(particleP4.at(i) + particleP4.at(j));
+                            decay_type = 1;
+                        }
                     }
                 }
             }
         }
-        if(best_j1_idx == -1 || best_j2_idx == -1) return -2; // No suitable jet pair found
-        // Reconstruct W from best jet pair
-        TLorentzVector jet1, jet2;
-        jet1.SetPtEtaPhiM((*truth_pt)[best_j1_idx],
-                          (*truth_eta)[best_j1_idx],
-                          (*truth_phi)[best_j1_idx],
-                          (*truth_m)[best_j1_idx]);
-        jet2.SetPtEtaPhiM((*truth_pt)[best_j2_idx],
-                          (*truth_eta)[best_j2_idx],
-                          (*truth_phi)[best_j2_idx],
-                          (*truth_m)[best_j2_idx]);
-        
-        ll_truth_W_reco = jet1 + jet2;
+        // Now try with quarks
+        int best_j1_idx = -1;
+        int best_j2_idx = -1;
+        for(size_t i = 0; i < truth_pdgid->size(); i++) {
+            // Skip if not a quark (assuming quarks have pdgid < 6)
+            if(abs((*truth_pdgid)[i]) >= 6) continue;
+            for(size_t j = i + 1; j < truth_pdgid->size(); j++) {
+                if(abs((*truth_pdgid)[j]) >= 6) continue;
+                // TLorentzVector dijet;
+                double mass_diff = abs((particleP4.at(i) + particleP4.at(j)).M() - W_MASS);
+                if(mass_diff < W_MASS_WINDOW) {
+                    double deltaR = ll_truth_W.DeltaR(particleP4.at(i) + particleP4.at(j));
+                    if((deltaR < min_delta_R) || (min_delta_R==-1)) {
+                        min_delta_R = deltaR;
+                        best_j1_idx = i;
+                        best_j2_idx = j;
+                        decay_type = 2;
+                    }
+                }
+            }
+        }
     }
+
+    // if(lepton_idx == -1) return -8; // No lepton found
+    // // Create lepton TLorentzVector
+    // TLorentzVector lepton;
+    // lepton.SetPtEtaPhiM((*truth_pt)[lepton_idx],
+    //                     (*truth_eta)[lepton_idx],
+    //                     (*truth_phi)[lepton_idx],
+    //                     (*truth_m)[lepton_idx]);
+    // if(decay_type == 1) {
+    //     // Look for corresponding neutrino
+    //     int target_nu_pdgid;
+    //     if(abs((*truth_pdgid)[lepton_idx]) == 11) {
+    //         target_nu_pdgid = 12; // electron neutrino
+    //     } else {
+    //         target_nu_pdgid = 14; // muon neutrino
+    //     }
+        
+    //     int nu_idx = -1;
+    //     for(size_t i = 0; i < truth_pdgid->size(); i++) {
+    //         if((*truth_pdgid)[i] == target_nu_pdgid) {
+    //             nu_idx = i;
+    //             break;
+    //         }
+    //     }
+    //     if(nu_idx == -1) return -1; // No matching neutrino found
+    //     // Create neutrino TLorentzVector and sum with lepton
+    //     TLorentzVector neutrino;
+    //     neutrino.SetPtEtaPhiM((*truth_pt)[nu_idx],
+    //                          (*truth_eta)[nu_idx],
+    //                          (*truth_phi)[nu_idx],
+    //                          (*truth_m)[nu_idx]);
+    //     ll_truth_W_reco = lepton + neutrino;
+    // } else if(decay_type == 2) {
+    //     // Look for jet pair with mass close to W mass
+    //     double best_deltaR = 999.0;
+    //     int best_j1_idx = -1;
+    //     int best_j2_idx = -1;
+    //     for(size_t i = 0; i < truth_pdgid->size(); i++) {
+    //         // Skip if not a jet (assuming jets have pdgid < 7)
+    //         if(abs((*truth_pdgid)[i]) >= 6) continue;
+    //         TLorentzVector jet1;
+    //         jet1.SetPtEtaPhiM((*truth_pt)[i],
+    //                          (*truth_eta)[i],
+    //                          (*truth_phi)[i],
+    //                          (*truth_m)[i]);
+    //         for(size_t j = i + 1; j < truth_pdgid->size(); j++) {
+    //             if(abs((*truth_pdgid)[j]) >= 6) continue;
+    //             TLorentzVector jet2;
+    //             jet2.SetPtEtaPhiM((*truth_pt)[j],
+    //                              (*truth_eta)[j],
+    //                              (*truth_phi)[j],
+    //                              (*truth_m)[j]);
+    //             TLorentzVector dijet = jet1 + jet2;
+    //             double mass_diff = abs(dijet.M() - W_MASS);
+    //             if(mass_diff < W_MASS_WINDOW) {
+    //                 double deltaR = dijet.DeltaR(ll_truth_W);
+    //                 if(deltaR < best_deltaR) {
+    //                     best_deltaR = deltaR;
+    //                     best_j1_idx = i;
+    //                     best_j2_idx = j;
+    //                 }
+    //             }
+    //         }
+    //     }
+    //     if(best_j1_idx == -1 || best_j2_idx == -1) return -2; // No suitable jet pair found
+    //     // Reconstruct W from best jet pair
+    //     TLorentzVector jet1, jet2;
+    //     jet1.SetPtEtaPhiM((*truth_pt)[best_j1_idx],
+    //                       (*truth_eta)[best_j1_idx],
+    //                       (*truth_phi)[best_j1_idx],
+    //                       (*truth_m)[best_j1_idx]);
+    //     jet2.SetPtEtaPhiM((*truth_pt)[best_j2_idx],
+    //                       (*truth_eta)[best_j2_idx],
+    //                       (*truth_phi)[best_j2_idx],
+    //                       (*truth_m)[best_j2_idx]);
+        
+    //     ll_truth_W_reco = jet1 + jet2;
+    // }
     for(size_t i = 0; i < truth_pdgid->size(); i++) {
         if (((*truth_pdgid)[i] == -15) and (decay_type == 1)) return -9; // Tau+ in the event truth-particles so this case is tricky, discount it
         if (((*truth_pdgid)[i] == -15) and (decay_type == 2)) return -10; // Tau+ in the event truth-particles so this case is tricky, discount it
     }
+    if (debugMode) std::cout << "\t" << "Leaving LowLevel_ClassifyDecayType" << std::endl;
     return decay_type;
 }
 
@@ -641,9 +1014,14 @@ bool EventLoop::LowLevel_Loop(){
     ll_particle_e.clear();
     ll_particle_type.clear();
     ll_particle_tagInfo.clear();
+    ll_particle_recoInclusion.clear();
+    ll_particle_trueInclusion.clear();
     ll_truth_Higgs.SetPtEtaPhiE(0,0,0,0);
+    ll_truth_Higgs_old.SetPtEtaPhiE(0,0,0,0);
     ll_truth_W.SetPtEtaPhiE(0,0,0,0);
+    ll_truth_W_old.SetPtEtaPhiE(0,0,0,0);
     ll_truth_W_reco.SetPtEtaPhiE(0,0,0,0);
+    ll_truth_W_reco_old.SetPtEtaPhiE(0,0,0,0);
     particles.clear();
     // Get the lepton
     Particle lepton;
@@ -655,6 +1033,8 @@ bool EventLoop::LowLevel_Loop(){
         lepton.type = 1; // muon
     }
     lepton.tagInfo = 0;
+    lepton.recoInclusion = 0;
+    lepton.trueInclusion = 0;
     particles.push_back(lepton);
     // Process neutrino - now using lepton information TODO Maybe use the same neutrino calculation as the orignal method here?
     // Particle neutrino = LowLevel_createNeutrino(met_met, met_phi, lepton.p4);
@@ -664,6 +1044,8 @@ bool EventLoop::LowLevel_Loop(){
     neutrino.type = 2;
     neutrino.p4.SetPtEtaPhiE(neutrinoVector.at(0)->Pt(), neutrinoVector.at(0)->Eta(), neutrinoVector.at(0)->Phi(), neutrinoVector.at(0)->E());
     neutrino.tagInfo = 0;
+    neutrino.recoInclusion = 0;
+    neutrino.trueInclusion = 0;
     particles.push_back(neutrino);
     // Process large-radius jets
     std::vector<TLorentzVector> ljetCandidates;
@@ -682,6 +1064,8 @@ bool EventLoop::LowLevel_Loop(){
             ljet.type = 3; // Non-Xbb-tagged large-R jet
         }
         ljet.tagInfo = DXbb;
+        ljet.recoInclusion = 0;
+        ljet.trueInclusion = 0;
         particles.push_back(ljet);
         ljetCandidates.push_back(ljet.p4);
     }
@@ -695,10 +1079,20 @@ bool EventLoop::LowLevel_Loop(){
         sjet.p4.SetPtEtaPhiE(jet_pt->at(j), jet_eta->at(j), jet_phi->at(j), jet_e->at(j));
         sjet.type = 4;
         sjet.tagInfo = jet_DL1r->at(j);
+        sjet.recoInclusion = 0;
+        sjet.trueInclusion = 0;
         particles.push_back(sjet);
         sjetCandidates.push_back(sjet.p4);
     }
     // Fill particle vectors for this event
+    // Get truth info TODO maybe use the same truth calculation as original method here?
+    if (false) std::cout << "------------------------------------------" << std::endl; // Testing 15/01/25
+    lepton_count = LowLevel_CountLeptons();
+    truth_decay_mode = LowLevel_ClassifyDecayType();
+    truth_decay_mode_old = LowLevel_ClassifyDecayType_OLD();
+    if (false) std::cout << "Truth decay mode: " << truth_decay_mode << std::endl; // Testing 15/01/25
+    if ((truth_decay_mode == 1) || (truth_decay_mode == 2)) LowLevel_MatchTruthParticles();
+    std::tie(best_mH, best_mWH_qqbb, best_mWH_lvbb) = LowLevel_GetBestWhMasses();
     for (const auto &particle : particles) {
         ll_particle_px.push_back(particle.p4.Px());
         ll_particle_py.push_back(particle.p4.Py());
@@ -706,13 +1100,9 @@ bool EventLoop::LowLevel_Loop(){
         ll_particle_e.push_back(particle.p4.E());
         ll_particle_type.push_back(particle.type);
         ll_particle_tagInfo.push_back(particle.tagInfo);
+        ll_particle_recoInclusion.push_back(particle.recoInclusion);
+        ll_particle_trueInclusion.push_back(particle.trueInclusion);
     }
-    // Get truth info TODO maybe use the same truth calculation as original method here?
-    if (false) std::cout << "------------------------------------------" << std::endl; // Testing 15/01/25
-    lepton_count = LowLevel_CountLeptons();
-    truth_decay_mode = LowLevel_ClassifyDecayType();
-    if (false) std::cout << "Truth decay mode: " << truth_decay_mode << std::endl; // Testing 15/01/25
-    std::tie(best_mH, best_mWH_qqbb, best_mWH_lvbb) = LowLevel_GetBestWhMasses();
     // output_tree->Fill();
     if (debugMode) std::cout << "\t" << "Leaving LowLevel_Loop" << std::endl;
     return true;
