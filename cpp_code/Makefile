@@ -8,6 +8,7 @@ BUILD   = $(LWTNN)/build/lib/liblwtnn-stat.a
 # Compiler and flags
 CXX     = g++
 CCFLAGS = -O2 -g  # Add specific flags if needed
+# CCFLAGS = -O0 -g  # Add specific flags if needed
 
 # ROOT configurations
 ROOT_CFLAGS = $(shell root-config --cflags)

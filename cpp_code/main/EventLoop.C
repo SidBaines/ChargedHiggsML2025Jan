@@ -14,7 +14,7 @@ Comments from Dominik
 
 int EventLoop::LowLevel_ClassifyDecayType_OLD(){
     const double W_MASS = 80.379e3; // GeV to MeV
-    const double W_MASS_WINDOW = 5.0e3; // GeV to MeV
+    const double W_MASS_WINDOW =5.0e3; // GeV to MeV
     // Check if truth information exists
     if (truth_pt->empty() || truth_eta->empty() || truth_phi->empty() || 
         truth_m->empty() || truth_pdgid->empty()) {
@@ -479,28 +479,76 @@ void EventLoop::Fill_NN_Scores(){
 
 }
 
-void EventLoop::LowLevel_MatchTruthParticles(){
+bool EventLoop::LowLevel_MatchTruthParticles(){
     // Match the low-level reco objects (elec, muon, neutrino, jets) to whether they appear to come from the H+ -> Wh in the truth level...
     if (debugMode) std::cout << "\t" << "Entering LowLevel_MatchTruthParticles" << std::endl;
-
     // First find the reco large-R jet or small-R jets which most closesly match the truth Higgs
-    float delta_R_TruthHiggs = -1;
-    // float delta_M_TruthHiggs = -1;
-    int best_H_ljet_idx = -1, best_H_sjet_idx1 = -1, best_H_sjet_idx2 = -1;
     int idx_counter = 0;
+    float delta_R_TruthHiggs = -1;
+    int best_H_ljet_idx = -1, best_H_sjet_idx1 = -1, best_H_sjet_idx2 = -1;
     bool best_bb_is_largeR = false;
-    for (const auto &particle : particles) {
-        if ((particle.type == 5)){
-            if (((ll_truth_Higgs.DeltaR(particle.p4)) < delta_R_TruthHiggs) || (delta_R_TruthHiggs==-1)){
-                delta_R_TruthHiggs = ll_truth_Higgs.DeltaR(particle.p4);
-                best_H_ljet_idx = idx_counter;
-                best_bb_is_largeR = true;
+    if (false) // Old (2025/02/27) method of matching Higgs large-R jet/small-R jets
+    {
+        for (const auto &particle : particles) {
+            if ((particle.type == 5)){
+                if (((ll_truth_Higgs.DeltaR(particle.p4)) < delta_R_TruthHiggs) || (delta_R_TruthHiggs==-1)){
+                    delta_R_TruthHiggs = ll_truth_Higgs.DeltaR(particle.p4);
+                    best_H_ljet_idx = idx_counter;
+                    best_bb_is_largeR = true;
+                }
+            }
+            idx_counter++;
+        }
+        if (best_H_ljet_idx == -1){ // No Xbb-tagged jets, so loop through non-Xbb tagged jets and small-jet pairs for H. Shouldn't really use this case but I'll do it anyway since we might want to use later
+            idx_counter = 0;
+            for (const auto &particle : particles) {
+                if ((particle.type == 3)){
+                    if (((ll_truth_Higgs.DeltaR(particle.p4)) < delta_R_TruthHiggs) || (delta_R_TruthHiggs==-1)){
+                        delta_R_TruthHiggs = ll_truth_Higgs.DeltaR(particle.p4);
+                        best_H_ljet_idx = idx_counter;
+                        best_bb_is_largeR = true;
+                    }
+                }
+                idx_counter++;
+            }
+            for (int i1=0; i1 < particles.size(); i1++){
+                if (particles[i1].type == 4){
+                    for(int i2=i1+1; i2 < particles.size(); i2++){
+                        if (particles[i2].type == 4){
+                                if (((ll_truth_Higgs.DeltaR(particles[i1].p4+particles[i2].p4)) < delta_R_TruthHiggs) || (delta_R_TruthHiggs==-1)){
+                                delta_R_TruthHiggs = ll_truth_Higgs.DeltaR(particles[i1].p4+particles[i2].p4);
+                                best_H_sjet_idx1 = i1;
+                                best_H_sjet_idx2 = i2;
+                                best_bb_is_largeR = false;
+                            }
+                        }
+                    }
+                }
             }
         }
-        idx_counter++;
-    }
-    if (best_H_ljet_idx == -1){ // No Xbb-tagged jets, so loop through non-Xbb tagged jets and small-jet pairs for H. Shouldn't really use this case but I'll do it anyway since we might want to use later
-        int idx_counter = 0;
+        if (delta_R_TruthHiggs != -1){
+            if (best_bb_is_largeR){
+                particles[best_H_ljet_idx].trueInclusion = 1;
+            } else{
+                particles[best_H_sjet_idx1].trueInclusion = 1;
+                particles[best_H_sjet_idx2].trueInclusion = 1;
+            }
+        } else{
+            return false;
+        }
+    } else // New (2025/02/28) method of matching Higgs large-R jet/small-R jets
+    {
+        for (const auto &particle : particles) {
+            if ((particle.type == 5)){
+                if (((ll_truth_Higgs.DeltaR(particle.p4)) < delta_R_TruthHiggs) || (delta_R_TruthHiggs==-1)){
+                    delta_R_TruthHiggs = ll_truth_Higgs.DeltaR(particle.p4);
+                    best_H_ljet_idx = idx_counter;
+                    best_bb_is_largeR = true;
+                }
+            }
+            idx_counter++;
+        }
+        idx_counter = 0;
         for (const auto &particle : particles) {
             if ((particle.type == 3)){
                 if (((ll_truth_Higgs.DeltaR(particle.p4)) < delta_R_TruthHiggs) || (delta_R_TruthHiggs==-1)){
@@ -512,11 +560,11 @@ void EventLoop::LowLevel_MatchTruthParticles(){
             idx_counter++;
         }
         for (int i1=0; i1 < particles.size(); i1++){
-            if (particles[i1].type == 4){
+            if (particles.at(i1).type == 4){
                 for(int i2=i1+1; i2 < particles.size(); i2++){
-                    if (particles[i2].type == 4){
-                            if (((ll_truth_Higgs.DeltaR(particles[i1].p4+particles[i2].p4)) < delta_R_TruthHiggs) || (delta_R_TruthHiggs==-1)){
-                            delta_R_TruthHiggs = ll_truth_Higgs.DeltaR(particles[i1].p4+particles[i2].p4);
+                    if (particles.at(i2).type == 4){
+                            if (((ll_truth_Higgs.DeltaR(particles.at(i1).p4+particles.at(i2).p4)) < delta_R_TruthHiggs) || (delta_R_TruthHiggs==-1)){
+                            delta_R_TruthHiggs = ll_truth_Higgs.DeltaR(particles.at(i1).p4+particles.at(i2).p4);
                             best_H_sjet_idx1 = i1;
                             best_H_sjet_idx2 = i2;
                             best_bb_is_largeR = false;
@@ -525,12 +573,19 @@ void EventLoop::LowLevel_MatchTruthParticles(){
                 }
             }
         }
-    }
-    if (best_bb_is_largeR){
-        particles[best_H_ljet_idx].trueInclusion = 1;
-    } else{
-        particles[best_H_sjet_idx1].trueInclusion = 1;
-        particles[best_H_sjet_idx2].trueInclusion = 1;
+        if (delta_R_TruthHiggs != -1){
+            if (best_bb_is_largeR){
+                if (debugMode) std::cout << "\t\t" << "Truth Higgs being matched to ljet" << best_H_ljet_idx << std::endl;
+                particles.at(best_H_ljet_idx).trueInclusion = 1;
+            } else{
+                if (debugMode) std::cout << "\t\t" << "Truth Higgs being matched to sjets" << best_H_sjet_idx1 << " and " << best_H_sjet_idx1 << std::endl;
+                particles.at(best_H_sjet_idx1).trueInclusion = 1;
+                particles.at(best_H_sjet_idx2).trueInclusion = 1;
+            }
+        } else{
+            if (debugMode) std::cout << "\t\t" << "Leaving LowLevel_MatchTruthParticles with Early (H matching) failure" << std::endl;
+            return false;
+        }
     }
 
     // Now the find the reco large-R jet or small-R jets or lep+neutrino combo which most closesly match the truth W, depending on truth decay mode
@@ -557,13 +612,13 @@ void EventLoop::LowLevel_MatchTruthParticles(){
         }
         // Now try with W as pairs of small-R jets
         for (int i1=0; i1 < particles.size(); i1++){
-            if (particles[i1].type == 4){
+            if (particles.at(i1).type == 4){
                 for(int i2=i1+1; i2 < particles.size(); i2++){
-                    if (particles[i2].type == 4){
+                    if (particles.at(i2).type == 4){
                         if ((i1!=best_H_sjet_idx1) || (i2!=best_H_sjet_idx2)){ // Check we're not overlapping with small-R jet h->bb if that was selected
                             // if ((abs((particles[i1].p4+particles[i2].p4).M()-80.36e3) < best_W_diff) || (best_W_diff==-1)){
-                            if (((ll_truth_W.DeltaR(particles[i1].p4+particles[i2].p4)) < delta_R_TruthW) || (delta_R_TruthW==-1)){
-                                delta_R_TruthW = ll_truth_W.DeltaR(particles[i1].p4+particles[i2].p4);
+                            if (((ll_truth_W.DeltaR(particles.at(i1).p4+particles.at(i2).p4)) < delta_R_TruthW) || (delta_R_TruthW==-1)){
+                                delta_R_TruthW = ll_truth_W.DeltaR(particles.at(i1).p4+particles.at(i2).p4);
                                 best_W_sjet_idx1 = i1;
                                 best_W_sjet_idx2 = i2;
                                 best_Wqq_is_largeR = false;
@@ -573,16 +628,27 @@ void EventLoop::LowLevel_MatchTruthParticles(){
                 }
             }
         }
-        if (best_Wqq_is_largeR){
-            particles[best_W_ljet_idx].trueInclusion = 2;
+        if (delta_R_TruthW != -1){
+            if (best_Wqq_is_largeR){
+                if (debugMode) std::cout << "\t\t" << "Truth W being matched to ljet" << best_W_ljet_idx << std::endl;
+                // particles[best_W_ljet_idx].trueInclusion = 2;
+                particles.at(best_W_ljet_idx).trueInclusion = 2;
+            } else{
+                if (debugMode) std::cout << "\t\t" << "Truth W being matched to sjets" << best_W_sjet_idx1 << " and " << best_W_sjet_idx2 << std::endl;
+                // particles[best_W_sjet_idx1].trueInclusion = 2;
+                // particles[best_W_sjet_idx2].trueInclusion = 2;
+                particles.at(best_W_sjet_idx1).trueInclusion = 2;
+                particles.at(best_W_sjet_idx2).trueInclusion = 2;
+            }
         } else{
-            particles[best_W_sjet_idx1].trueInclusion = 2;
-            particles[best_W_sjet_idx2].trueInclusion = 2;
+            if (debugMode) std::cout << "\t\t" << "Leaving LowLevel_MatchTruthParticles with Early (W matching) failure" << std::endl;
+            return false;
         }
     } else{ // Should not be able to get here
         assert((false));
     }
     if (debugMode) std::cout << "\t" << "Leaving LowLevel_MatchTruthParticles" << std::endl;
+    return true;
 }
 
 std::tuple<float, float, float> EventLoop::LowLevel_GetBestWhMasses(){
@@ -638,11 +704,13 @@ std::tuple<float, float, float> EventLoop::LowLevel_GetBestWhMasses(){
             }
         }
     }
-    if (best_bb_is_largeR){
-        particles[best_H_ljet_idx].recoInclusion = 1;
-    } else{
-        particles[best_H_sjet_idx1].recoInclusion = 1;
-        particles[best_H_sjet_idx2].recoInclusion = 1;
+    if (best_H_ljet_idx!=-1){
+        if (best_bb_is_largeR){
+            particles.at(best_H_ljet_idx).recoInclusion = 1;
+        } else{
+            particles.at(best_H_sjet_idx1).recoInclusion = 1;
+            particles.at(best_H_sjet_idx2).recoInclusion = 1;
+        }
     }
 
     // Now find best W indices as a single large-R jet (separate from Higgs) if one exists
@@ -680,14 +748,16 @@ std::tuple<float, float, float> EventLoop::LowLevel_GetBestWhMasses(){
             }
         }
     }
-    if (best_Wqq_is_largeR){
-        particles[best_W_ljet_idx].recoInclusion = 2;
-    } else{
-        particles[best_W_sjet_idx1].recoInclusion = 2;
-        particles[best_W_sjet_idx2].recoInclusion = 2;
+    if (best_W_diff!=-1){
+        if (best_Wqq_is_largeR){
+            particles.at(best_W_ljet_idx).recoInclusion = 2;
+        } else{
+            particles.at(best_W_sjet_idx1).recoInclusion = 2;
+            particles.at(best_W_sjet_idx2).recoInclusion = 2;
+        }
+        best_qqbb = (best_H + best_W_qq).M();
+        best_mWqq = best_W_qq.M();
     }
-    best_qqbb = (best_H + best_W_qq).M();
-    best_mWqq = best_W_qq.M();
 
     TLorentzVector lep, neut;
     idx_counter = 0;
@@ -719,6 +789,7 @@ std::tuple<float, float, float> EventLoop::LowLevel_GetBestWhMasses(){
 }
 
 int EventLoop::LowLevel_CountLeptons(){
+    if (debugMode) std::cout << "\t" << "Entering LowLevel_CountLeptons" << std::endl;
     // Check if truth information exists
     if (truth_pt->empty() || truth_eta->empty() || truth_phi->empty() || 
         truth_m->empty() || truth_pdgid->empty()) {
@@ -759,13 +830,14 @@ int EventLoop::LowLevel_CountLeptons(){
     }
     // Count unique leptons
     int leptonCount = std::count(is_unique.begin(), is_unique.end(), true);
+    if (debugMode) std::cout << "\t" << "Leaving LowLevel_CountLeptons" << std::endl;
     return leptonCount;
 }
 
 int EventLoop::LowLevel_ClassifyDecayType(){
     if (debugMode) std::cout << "\t" << "Entering LowLevel_ClassifyDecayType" << std::endl;
     const double W_MASS = 80.379e3; // GeV to MeV
-    const double W_MASS_WINDOW = 5.0e3; // GeV to MeV
+    const double W_MASS_WINDOW = 20.0e3; // GeV to MeV
     // Check if truth information exists
     if (truth_pt->empty() || truth_eta->empty() || truth_phi->empty() || 
         truth_m->empty() || truth_pdgid->empty()) {
@@ -1057,6 +1129,12 @@ bool EventLoop::LowLevel_Loop(){
         if ((LowLevelDeltaRLepLjetCut) && (fabs(ljet.p4.DeltaR(lepton.p4)) < 1.0)){
             continue;
         }
+        if ((LowLevelLjetPtCut) && (ljet.p4.Pt() < 250e3)){
+            continue;
+        }
+        if ((LowLevelLjetMassCut) && ((ljet.p4.M() < 50e3) || (ljet.p4.M() > 250e3))){
+            continue;
+        }
         DXbb = log(ljet_Xbb2020v3_Higgs->at(j)/(0.25*ljet_Xbb2020v3_Top->at(j) + 0.75*ljet_Xbb2020v3_QCD->at(j)));
         if (DXbb >= DxbbThreshold){
             ljet.type = 5; // Xbb-tagged large-R jet
@@ -1069,6 +1147,7 @@ bool EventLoop::LowLevel_Loop(){
         particles.push_back(ljet);
         ljetCandidates.push_back(ljet.p4);
     }
+    nLjets_ll = ljetCandidates.size();
     if (ljetCandidates.size() == 0){
         return false;
     }
@@ -1091,7 +1170,7 @@ bool EventLoop::LowLevel_Loop(){
     truth_decay_mode = LowLevel_ClassifyDecayType();
     truth_decay_mode_old = LowLevel_ClassifyDecayType_OLD();
     if (false) std::cout << "Truth decay mode: " << truth_decay_mode << std::endl; // Testing 15/01/25
-    if ((truth_decay_mode == 1) || (truth_decay_mode == 2)) LowLevel_MatchTruthParticles();
+    if ((truth_decay_mode == 1) || (truth_decay_mode == 2)) successfulTruthMatch = LowLevel_MatchTruthParticles();
     std::tie(best_mH, best_mWH_qqbb, best_mWH_lvbb) = LowLevel_GetBestWhMasses();
     for (const auto &particle : particles) {
         ll_particle_px.push_back(particle.p4.Px());

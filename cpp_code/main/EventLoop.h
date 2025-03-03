@@ -300,11 +300,15 @@ public :
 
 
    // Extra variables for output to the output TTree
+   // BETWEEN THESE LINES ARE THE LOW LEVEL VARIABLES FOR SID'S NEW METHOD
    std::vector<float> ll_particle_px, ll_particle_py, ll_particle_pz, ll_particle_e, ll_particle_tagInfo;
    std::vector<int> ll_particle_type, ll_particle_recoInclusion, ll_particle_trueInclusion;
-   int truth_decay_mode, lepton_count;
+   int truth_decay_mode, lepton_count, nLjets_ll;
    int truth_decay_mode_old;
+   bool successfulTruthMatch;
    float best_mWH_lvbb, best_mWH_qqbb, best_mH, best_mWqq, best_mWlv;
+   // BETWEEN THESE LINES ARE THE LOW LEVEL VARIABLES FOR SID'S NEW METHOD
+
    Float_t         Lepton_Eta;
    Float_t         Lepton_Pt;
    Float_t         Lepton_Phi;
@@ -401,6 +405,8 @@ public :
    bool doCombined; // Variable read from config to allow Combined mode where the even/odd NN scores are combined into one branch
    bool WriteAllEvents; // Variable read from config to allow us to write all events (ie, not just those where the selection of 0, 3, 8, 9, 10 is passed)
    bool LowLevelDeltaRLepLjetCut; // Variable read from config to allow us to toggle whether or not the DeltaR(ljet, lep)>1.0 cut is on for the low-level particles
+   bool LowLevelLjetPtCut; // Variable read from config to allow us to toggle whether or not the ljet Pt > 250GeV cut is on for the low-level particles
+   bool LowLevelLjetMassCut; // Variable read from config to allow us to toggle whether or not the ljet mass > 50GeV  and < 250GeV cut is on for the low-level particles
    bool lightWeightMode; // Variable read from config to allow lightweight mode, which only stores a small selection of our data
    std::string ttbarSelection; // Variable read from config to determine the ttbar weight selection mode. Can be one of: "Nominal", "Bfilt", "HTfilt", "Bfilt + HTfilt"
    bool lowlevel_output_mode = false;        // Variable read from config to allow write-out (to root TTree) of the low-level input variables (small-R jets and large-R jets, specifically). This should be turned off to save space if you don't need it
@@ -799,7 +805,7 @@ public :
    virtual int      LowLevel_CountLeptons();
    virtual int      LowLevel_ClassifyDecayType();
    virtual int      LowLevel_ClassifyDecayType_OLD();
-   virtual void LowLevel_MatchTruthParticles();
+   virtual bool LowLevel_MatchTruthParticles();
    virtual std::tuple<float, float, float> LowLevel_GetBestWhMasses();
    virtual void     Fill_NN_Scores();
    // Chi2_minimization *myMinimizer = new Chi2_minimization("MeV"); // unused
@@ -1283,6 +1289,14 @@ EventLoop::EventLoop(TTree *tree, TString ExpUncertaintyName, TString outFileNam
    {
       LowLevelDeltaRLepLjetCut = (config["low_level_delta_R_lep_ljet_cut"] == "Enable" || config["low_level_delta_R_lep_ljet_cut"] == "enable");
    }
+   if (config["low_level_ljet_Pt_cut"] != "")
+   {
+      LowLevelLjetPtCut = (config["low_level_ljet_Pt_cut"] == "Enable" || config["low_level_ljet_Pt_cut"] == "enable");
+   }
+   if (config["low_level_ljet_mass_cut"] != "")
+   {
+      LowLevelLjetMassCut = (config["low_level_ljet_mass_cut"] == "Enable" || config["low_level_ljet_mass_cut"] == "enable");
+   }
    if (config["lightWeightMode"] != "")
    {
       lightWeightMode = (config["lightWeightMode"] == "Enable" || config["lightWeightMode"] == "enable");
@@ -1580,12 +1594,14 @@ EventLoop::EventLoop(TTree *tree, TString ExpUncertaintyName, TString outFileNam
    output_tree->Branch("ll_particle_trueInclusion", &ll_particle_trueInclusion);
    output_tree->Branch("ll_truth_decay_mode", &truth_decay_mode);
    output_tree->Branch("ll_truth_decay_mode_old", &truth_decay_mode_old);
+   output_tree->Branch("ll_successful_truth_match", &successfulTruthMatch);
    output_tree->Branch("ll_best_mH", &best_mH);
    output_tree->Branch("ll_best_mWqq", &best_mWqq);
    output_tree->Branch("ll_best_mWlv", &best_mWlv);
    output_tree->Branch("ll_best_mWH_lvbb", &best_mWH_lvbb);
    output_tree->Branch("ll_best_mWH_qqbb", &best_mWH_qqbb);
    output_tree->Branch("ll_lepton_count", &lepton_count);
+   output_tree->Branch("ll_nLjets", &nLjets_ll);
    // output_tree->Branch("RunNumber", &runNumber);
 
    // Event metadata
