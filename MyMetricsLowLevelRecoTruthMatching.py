@@ -1,0 +1,250 @@
+import torch 
+import torch.nn.functional as F
+import wandb
+from matplotlib import pyplot as plt
+from sklearn.metrics import roc_curve
+from utils import weighted_correlation
+import einops
+
+def init_wandb(config):
+    wandb.init(
+        project="HEP-Transformers-TruthMatchingReco",
+        config=config,
+        name=config["name"],
+        magic=True,
+    )
+    wandb.define_metric("epoch")
+    wandb.define_metric("train/*", step_metric="epoch")
+    wandb.define_metric("val/*", step_metric="epoch")
+
+
+class HEPMetrics:
+    def __init__(self,
+                 padding_token,
+                 num_objects=22, 
+                 max_buffer_len=100000,
+                 mass_bins=50, 
+                 mass_range=(0, 1000), 
+                 signal_acceptance_levels=[500],
+                 max_bkg_levels=[200],
+                 total_weights_per_dsid={},
+                 mHLimits=[(0,1e10),(95e3, 140e3)],
+                 unweighted=False,
+                 ):
+        self.padding_token = padding_token
+        self.num_objects = num_objects
+        self.max_buffer_len = max_buffer_len
+        assert(len(total_weights_per_dsid))
+        self.total_weights_per_dsid = total_weights_per_dsid
+        self.unweighted = unweighted
+        self.DSID_MASS_MAPPING = {510115:0.8, 510116:0.9, 510117:1.0, 510118:1.2, 510119:1.4, 510120:1.6, 510121:1.8, 510122:2.0, 510123:2.5, 510124:3.0}
+        self.loss = torch.nn.CrossEntropyLoss(reduction='none')
+        self.reset()
+        
+    def reset(self):
+        # Store all predictions and targets with weights
+        self.all_preds = torch.zeros((self.max_buffer_len, self.num_objects))
+        self.all_targets = torch.zeros((self.max_buffer_len, self.num_objects))
+        self.all_weights = torch.zeros(self.max_buffer_len)
+        self.all_dsids = torch.zeros(self.max_buffer_len)  # to track dsid for each sample
+        self.all_types = torch.zeros(self.max_buffer_len, self.num_objects) # to track whether an object is present or is to be padded for calculations
+        self.processed_weight_sums_per_dsid = {}  # to track weight sums per dsid
+        self.current_update_point = 0
+        self.starts = {
+            # 'accuracy' : 0,
+            'cross_entropy':0,
+            'full_reconstruction':0,
+        }
+
+    def reset_starts(self, ks=None):
+        if ks is None: # All of them
+            self.starts = {k:0 for k in self.starts.keys()}
+        else:
+            for k in ks:
+                self.starts[k] = 0
+
+    def update(self, preds, targets, weights, dsid, types):
+        """
+        Args:
+            preds: Tensor of shape [batch_size, 3] with predicted probabilities
+                  (columns: background, lvbb, qqbb)
+            targets: Tensor of shape [batch_size] with true class indices
+            weights: Tensor of shape [batch_size] with sample weights
+            dsid: Tensor of shape [batch_size] with dsid for each sample
+        """
+        # Convert to probabilities if needed
+        # if (abs(preds.sum(dim=-1).mean().item()-1)>0.0001):  # If logits are passed
+        #     # print('Softmaxing TEST REMOVE THIS PRINT STATEMENT')
+        #     probs = F.softmax(preds, dim=1)
+        # else:
+        #     probs = preds
+        n_batch = len(targets)
+        assert(n_batch <= self.max_buffer_len)
+        if (self.current_update_point + n_batch) > self.max_buffer_len:
+            self.current_update_point = 0 # Have to restart
+            self.reset_starts()
+            print("WARNING: Restarting because buffer is full")
+        self.all_preds[self.current_update_point:self.current_update_point+n_batch] = preds.cpu().detach()
+        self.all_targets[self.current_update_point:self.current_update_point+n_batch] = targets.cpu().detach()
+        self.all_weights[self.current_update_point:self.current_update_point+n_batch] = weights.cpu().detach()
+        self.all_dsids[self.current_update_point:self.current_update_point+n_batch] = dsid.cpu().detach()
+        self.all_types[self.current_update_point:self.current_update_point+n_batch] = types.cpu().detach() # Needed so we can mask the padding objects for metric tracking
+
+        # Update weight sums per dsid
+        unique_dsid = dsid.cpu().unique()
+        for d in unique_dsid:
+            if d.item() not in self.processed_weight_sums_per_dsid:
+                self.processed_weight_sums_per_dsid[d.item()] = 0.0
+            self.processed_weight_sums_per_dsid[d.item()] += weights[dsid == d].sum().item()
+        self.current_update_point += n_batch
+
+    def compute_and_log(self, epoch, prefix="val", step=None, log_level=0, save=True, commit=None):
+        # print("Accuracy calculated: ", self.accuracy.compute())
+        if log_level > -1:
+            # accuracies = self.compute_accuracy()
+            # self.starts['accuracy'] = self.current_update_point
+            # metrics = {
+            #     f"{prefix}/accuracy{label}": accuracies[label] for label in accuracies.keys()
+            # }
+            metrics = {}
+            losses = self.compute_loss()
+            self.starts['cross_entropy'] = self.current_update_point
+            metrics.update({
+                f"{prefix}/loss_{label}": losses[label] for label in losses.keys()
+                })
+            recos = self.compute_fullrecos()
+            self.starts['full_reconstruction'] = self.current_update_point
+            for k in recos.keys():
+                metrics.update({
+                    f"{prefix}/{k}_{label}": recos[k][label] for label in recos[k].keys()
+                    })
+            metrics["epoch"] = epoch
+        if save:
+            wandb.log({**metrics, "epoch": epoch, "step":step}, commit=commit)
+        else:
+            print(metrics)
+        return metrics
+    
+    def compute_fullrecos(self):
+        idx_mask = (torch.arange(len(self.all_preds))>self.starts['full_reconstruction']) & (torch.arange(len(self.all_preds))<self.current_update_point)
+        results = {k:{} for k in ['PerfectRecoPct', 'Pct_OverPredict', 'Pct_UnderPredict', 'Pct_MisPredict']}
+        results['PerfectRecoPct']['all'] = ((((self.all_preds[idx_mask]>0)==self.all_targets[idx_mask].to(bool))|(self.all_types[idx_mask]==self.padding_token)).all(dim=-1) * self.all_weights[idx_mask]).sum() / self.all_weights[idx_mask].sum()
+        for dsid in self.DSID_MASS_MAPPING.keys():
+            try:
+                mask = idx_mask & (self.all_dsids==dsid)
+                results['PerfectRecoPct'][self.DSID_MASS_MAPPING[dsid]] = ((((self.all_preds[mask]>0)==self.all_targets[mask].to(bool))|(self.all_types[mask]==self.padding_token)).all(dim=-1) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
+            except:
+                results['PerfectRecoPct'][self.DSID_MASS_MAPPING[dsid]]=0
+
+        
+        eligible_items = self.all_types!=self.padding_token
+        predicted_present_items = self.all_preds>0
+        true_present_items = self.all_targets!=0
+
+
+        # print("Total eligibe items:")
+        # print((eligible_items).sum(dim=-1))
+        # print("Total correct items:")
+        # print((((predicted_present_items)==true_present_items) & (eligible_items)).sum(dim=-1)[idx_mask])
+        # print("Total incorrect items:")
+        # print((((predicted_present_items)!=true_present_items) & (eligible_items)).sum(dim=-1)[idx_mask])
+        # print("Total items predicted:")
+        # print(((predicted_present_items) & (eligible_items)).sum(dim=-1)[idx_mask])
+        # print("Total items truth:")
+        # print((true_present_items & (eligible_items)).sum(dim=-1)[idx_mask])
+        # print("Total over-prediction (pred-total):")
+        # print((((predicted_present_items) & (eligible_items)).sum(dim=-1) - (true_present_items & (eligible_items)).sum(dim=-1))[idx_mask])
+        over_prediction_amount = (predicted_present_items & eligible_items).sum(dim=-1) - (true_present_items & eligible_items).sum(dim=-1)
+        
+        # print("Perecentage under-predicted")
+        # print(((over_prediction_amount<0)*self.all_weights)[idx_mask].sum()/self.all_weights[idx_mask].sum())
+        results['Pct_UnderPredict']['all'] = ((over_prediction_amount<0)*self.all_weights)[idx_mask].sum()/self.all_weights[idx_mask].sum()
+        for dsid in self.DSID_MASS_MAPPING.keys():
+            try:
+                mask = idx_mask & (self.all_dsids==dsid)
+                results['Pct_UnderPredict'][self.DSID_MASS_MAPPING[dsid]] = ((over_prediction_amount<0)*self.all_weights)[mask].sum()/self.all_weights[mask].sum()
+            except:
+                results['Pct_UnderPredict'][self.DSID_MASS_MAPPING[dsid]]=0
+
+        # print("Perecentage over-predicted")
+        # print(((over_prediction_amount>0)*self.all_weights)[idx_mask].sum()/self.all_weights[idx_mask].sum())
+        results['Pct_OverPredict']['all'] = ((over_prediction_amount<0)*self.all_weights)[idx_mask].sum()/self.all_weights[idx_mask].sum()
+        for dsid in self.DSID_MASS_MAPPING.keys():
+            try:
+                mask = idx_mask & (self.all_dsids==dsid)
+                results['Pct_OverPredict'][self.DSID_MASS_MAPPING[dsid]] = ((over_prediction_amount>0)*self.all_weights)[mask].sum()/self.all_weights[mask].sum()
+            except:
+                results['Pct_OverPredict'][self.DSID_MASS_MAPPING[dsid]]=0
+        
+        # print("Percentage predicted correct # but wrong")
+        # print((((over_prediction_amount==0)&(~(((predicted_present_items==true_present_items)|(~eligible_items)).all(dim=-1))))*self.all_weights)[idx_mask].sum()/self.all_weights[idx_mask].sum())
+        results['Pct_MisPredict']['all'] = (((over_prediction_amount==0)&(~(((predicted_present_items==true_present_items)|(~eligible_items)).all(dim=-1))))*self.all_weights)[idx_mask].sum()/self.all_weights[idx_mask].sum()
+        for dsid in self.DSID_MASS_MAPPING.keys():
+            try:
+                mask = idx_mask & (self.all_dsids==dsid)
+                results['Pct_MisPredict'][self.DSID_MASS_MAPPING[dsid]] = (((over_prediction_amount==0)&(~(((predicted_present_items==true_present_items)|(~eligible_items)).all(dim=-1))))*self.all_weights)[mask].sum()/self.all_weights[mask].sum()
+            except:
+                results['Pct_MisPredict'][self.DSID_MASS_MAPPING[dsid]]=0
+        
+        
+        # print("Percentage predicted correctly")
+        # print(((((predicted_present_items==true_present_items)|(~eligible_items)).all(dim=-1))*self.all_weights)[idx_mask].sum()/self.all_weights[idx_mask].sum())
+
+        return results
+    
+    def compute_loss(self):
+        idx_mask = (torch.arange(len(self.all_preds))>self.starts['cross_entropy']) & (torch.arange(len(self.all_preds))<self.current_update_point)
+        results = {'all':(self.loss(self.all_preds[idx_mask], self.all_targets[idx_mask]) * self.all_weights[idx_mask]).sum() / self.all_weights[idx_mask].sum()}
+        for dsid in self.DSID_MASS_MAPPING.keys():
+            try:
+                mask = idx_mask & (self.all_dsids==dsid)
+                results[self.DSID_MASS_MAPPING[dsid]] = (self.loss(self.all_preds[mask], self.all_targets[mask]) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
+            except:
+                results[self.DSID_MASS_MAPPING[dsid]]=0
+        return results
+
+# Modified loss class with wandb logging
+class HEPLoss(torch.nn.Module):
+    def __init__(self, weight_by_mH=False, alpha=1.0, target_mass=125, apply_correlation_penalty=False):
+        super().__init__()
+        self.ce = torch.nn.CrossEntropyLoss(reduction='none')
+        self.bce = torch.nn.BCEWithLogitsLoss(reduction='none')
+        self.weight_by_mH = weight_by_mH
+        self.alpha = alpha
+        self.apply_correlation_penalty = apply_correlation_penalty
+        
+    def forward(self, inputs, targets, types, padding_token, n_objs, weights, log):
+        # if self.weight_by_mH:
+        #     weights *= self.scale_loss_by_mH(mHs)
+        
+        if 0: # Loss all together
+            ce_loss = self.ce(inputs, targets) * weights
+        else: # Loss per object
+            num_nonempty_objs = (types!=padding_token).sum(dim=-1)
+            ce_loss = self.bce(inputs.flatten(), (targets!=0).to(float).flatten()) * (einops.repeat((weights/num_nonempty_objs), 'batch -> batch max_n_objects',max_n_objects=n_objs)*(types!=padding_token)).flatten()
+        
+        # correlation_loss = weighted_correlation(ce_loss, (inputs[bkg,1]>inputs[bkg,2])*masses_lv[bkg] + (inputs[bkg,1]<=inputs[bkg,2])*masses_qq[bkg], weights[bkg]) ** 2
+        # if self.apply_correlation_penalty:
+        #     total_loss = (ce_loss.sum())/(weights.sum()) + self.alpha * correlation_loss
+        # else:
+        if 1:
+            total_loss = (ce_loss.sum())/(weights.sum())
+        
+        # Log individual loss components
+        if log:
+            wandb.log({
+                "loss/ce": (ce_loss.sum())/(weights.sum()).item(),
+                # "loss/total_withCorrelation": (total_loss + self.alpha * correlation_loss).item(),
+                # "loss/correlation": correlation_loss.item(),
+                # "loss/lv_mass": lv_mass_loss.item()
+            }, commit=False)
+        
+        return total_loss
+
+    def scale_loss_by_mH(self, mH):
+        # TODO replace this with just like a torch.gaussain or something to allow more flexibility
+        TrueMh = 125e3
+        maxDiff=125e3 # Can be at most 250 and min 50
+        factor_at_max_diff = 0.05
+        stretch_factor = np.sqrt(np.log(1/factor_at_max_diff))
+        return 1/torch.exp(((mH-TrueMh)/maxDiff*stretch_factor)**2)
