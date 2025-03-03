@@ -19,10 +19,11 @@ do
         continue
     fi
     echo $sample_dir
-    # if [[ $sample_dir != *"510124"* ]]; then
     # # if [[ $sample_dir != *"410470"* ]]; then
-    #     continue
-    # fi
+    # if [[ $sample_dir != *"510122"* ]]; then
+    if [[ $sample_dir != *"5101"* ]]; then
+        continue
+    fi
     # if [[ $sample_dir != *"410470"*"r9364"* ]]; then
     #     continue
     # fi
@@ -104,6 +105,6 @@ do
     #     continue
     # fi
     echo "Running on $sample_dir"
-    ./roo MCbase.cpp $sample_dir /data/atlas/HplusWh/20250218_Cats038910_NoDeltaRReq_TagInfo/
+    bin/roo MCbase.cpp $sample_dir /data/atlas/HplusWh/20250227_v4_tmpWithTrueInclusion/
     # echo "     "
 done

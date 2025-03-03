@@ -2,12 +2,13 @@
 SDIR    = ./
 IDIR    = ./
 LDIR    = ./
-LWTNN   = ../lwtnn
+LWTNN   = ../../ChargedHiggs_CodeForThesis/lwtnn
 BUILD   = $(LWTNN)/build/lib/liblwtnn-stat.a
 
 # Compiler and flags
 CXX     = g++
 CCFLAGS = -O2 -g  # Add specific flags if needed
+# CCFLAGS = -O0 -g  # Add specific flags if needed
 
 # ROOT configurations
 ROOT_CFLAGS = $(shell root-config --cflags)
@@ -20,8 +21,8 @@ SOURCES = main.C main/EventLoop.C utilis/NeutrinoBuilder.C
 HEADERS = utilis/configparser.h
 
 # Output binary
-BINS = roo
-BINS2 = extra
+BINS = bin/roo
+BINS2 = bin/extra
 
 # Default target
 all: $(BINS) $(BINS2)
@@ -39,6 +40,7 @@ $(BINS2): % : GetNumEntriesMain.C
 
 # Clean rule (optional)
 clean:
-	rm -f roo getNumEntriesExecute
+#	rm -f bin/roo bin/getNumEntriesExecute
+	rm bin/roo bin/getNumEntriesExecute
 
 .PHONY: all clean
