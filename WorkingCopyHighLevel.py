@@ -88,7 +88,8 @@ for file_name in os.listdir(DATA_PATH):
             memmap_paths_train[int(dsid)] = DATA_PATH+file_name
     else:
         pass
-train_split=0.5
+n_splits=2
+validation_split_idx=0
 train_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  memmap_paths = memmap_paths_train,  # DSID to memmap path
                  N_Real_Vars=N_Real_Vars, # Will auto add 4 (for the y, w, dsid, mWh) inside the funciton
@@ -96,8 +97,9 @@ train_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  batch_size=batch_size,
                  device=device, 
                  is_train=True,
+                 validation_split_idx=validation_split_idx,
+                 n_splits=n_splits,
                  n_targets=N_TARGETS,
-                 train_split=train_split,
                  means=means,
                  stds=stds,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
@@ -109,9 +111,10 @@ val_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  class_proportions = None,
                  batch_size=batch_size,
                  device=device, 
-                 is_train=False,
+                 is_train=True,
+                 validation_split_idx=validation_split_idx,
+                 n_splits=n_splits,
                  n_targets=N_TARGETS,
-                 train_split=train_split,
                  means=means,
                  stds=stds,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),

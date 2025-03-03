@@ -18,7 +18,8 @@ class ProportionalMemoryMappedDatasetHighLevel:
                  batch_size: int = 64,
                  device: str = 'cpu',
                  is_train: bool = True,
-                 train_split: float = 0.8,
+                 validation_split_idx: int = 0,
+                 n_splits: int = 2,
                  n_targets: int = 3,
                  shuffle_batch: bool = True, # Whether or not to shuffle along the batch dimension, should be true unless we're testing
                  signal_reweights: typing.Optional[np.array]=None,
@@ -45,7 +46,8 @@ class ProportionalMemoryMappedDatasetHighLevel:
 
         # Add train/val splitting logic
         self.is_train = is_train
-        self.train_split = train_split
+        self.validation_split_idx = validation_split_idx
+        self.n_splits = n_splits
         # Add/populate with defaults the mean/std for scaling inputs
         if means is not None:
             self.means = torch.Tensor(means).to(torch.float32)
@@ -126,9 +128,9 @@ class ProportionalMemoryMappedDatasetHighLevel:
         for dsid in self.memmaps.keys():
             # Randomly shuffle indices for each class
             if self.is_train:
-                self.current_indices[dsid] = list(range(floor((1-self.train_split)*self.sample_counts[dsid]), self.sample_counts[dsid]))
+                self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.arange(self.sample_counts[dsid]) % self.n_splits) != self.validation_split_idx]
             else:
-                self.current_indices[dsid] = list(range(floor((1-self.train_split)*self.sample_counts[dsid])))
+                self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.arange(self.sample_counts[dsid]) % self.n_splits) == self.validation_split_idx]
             if self.shuffle_batch:
                 random.shuffle(self.current_indices[dsid])
         self.total_samples = sum([len(self.current_indices[dsid]) for dsid in self.current_indices.keys()])

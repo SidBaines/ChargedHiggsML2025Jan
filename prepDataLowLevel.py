@@ -21,6 +21,7 @@ from utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtE
 
 # %% Some basic setup
 # Some choices about the  process
+PHI_ROTATED = True
 INCLUDE_TAG_INFO = True
 TOSS_UNCERTAIN_TRUTH = True
 if not TOSS_UNCERTAIN_TRUTH:
@@ -43,7 +44,7 @@ else:
     N_CTX = 6 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
 BIN_WRITE_TYPE=np.float32
 max_n_objs = 14 # BE CAREFUL because this might change and if it does you ahve to rebinarise
-OUTPUT_DIR = '/data/atlas/baines/tmp_SingleXbbSelected' + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '/'
+OUTPUT_DIR = '/data/atlas/baines/tmp_SingleXbbSelected' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '/'
 # OUTPUT_DIR = './tmp/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 if INCLUDE_TAG_INFO:
@@ -114,9 +115,10 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     else:
         truth_var = 'll_truth_decay_mode'
         mH_var = 'll_best_mH'
-    particle_features=['part_px', 'part_py', 'part_pz', 'part_energy', 'll_particle_tagInfo']
+    particle_features=['part_px', 'part_py', 'part_pz', 'part_energy']
     if INCLUDE_TAG_INFO:
-        particle_features.append('ll_particle_type')
+        particle_features.append('ll_particle_tagInfo')
+    particle_features.append('ll_particle_type')
     x_part, x_event, y = read_file(filepath, 
                                 particle_features=particle_features,
                                 event_level_features=[
@@ -181,7 +183,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
         x_part[:,0,:] = rotatedx
         x_part[:,1,:] = rotatedy
         x_part[:,2,:] = rotatedz
-    elif 1:
+    elif PHI_ROTATED:
         rotatedx, rotatedy, _, _ = Rotate4VectorPhi(
                         x_part[:,0,:], 
                         x_part[:,1,:], 
@@ -320,10 +322,10 @@ MAX_CHUNK_SIZE = 100000
 # MAX_PER_DSID = {dsid : 10000000 for dsid in dsid_set}
 # MAX_PER_DSID[410470] = 100
 for dsid in dsid_set:
-    if dsid <= 700341:
+    # if dsid <= 700341:
     # if dsid != 410470:
     # if dsid != 510124:
-        continue
+        # continue
     # if '510' in str(dsid):
     #     continue
 # for dsid in [510120]:

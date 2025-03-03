@@ -52,7 +52,8 @@ class ProportionalMemoryMappedDataset:
                  batch_size: int = 64,
                  device: str = 'cpu',
                  is_train: bool = True,
-                 train_split: float = 0.8,
+                 validation_split_idx: int = 0,
+                 n_splits: int = 2,
                  n_targets: int = 3,
                  shuffle: bool = False, # Whether or not to shuffle along the object dimension,
                  shuffle_batch: bool = True, # Whether or not to shuffle along the batch dimension,
@@ -60,6 +61,7 @@ class ProportionalMemoryMappedDataset:
                  means=None,
                  stds=None,
                  objs_to_output=14,
+                 signal_only=False, # Flag which is used for when we are only including signals, so that we don't multiply all weights by 0 in an effort to balance
                  ):
         """
         Initialize a dataset loader with memory-mapped files for each class (DSID)
@@ -84,7 +86,8 @@ class ProportionalMemoryMappedDataset:
 
         # Add train/val splitting logic
         self.is_train = is_train
-        self.train_split = train_split
+        self.validation_split_idx = validation_split_idx
+        self.n_splits = n_splits
         # Add/populate with defaults the mean/std for scaling inputs
         if means is not None:
             self.means = torch.Tensor(means).to(torch.float32).unsqueeze(dim=0).unsqueeze(dim=0)
@@ -133,6 +136,8 @@ class ProportionalMemoryMappedDataset:
                     self.num_signals += 1
         if self.signal_reweights is not None:
             assert(len(self.signal_reweights)==self.num_signals)
+        if signal_only:
+            self.bkg_weight_sums = 340000/2 # Radnom-ish guess as to how to make the weights ~1.0 magnitude
         
         # Determine proportions
         if class_proportions is None:
@@ -165,9 +170,9 @@ class ProportionalMemoryMappedDataset:
         for dsid in self.memmaps.keys():
             # Randomly shuffle indices for each class
             if self.is_train:
-                self.current_indices[dsid] = list(range(floor((1-self.train_split)*self.sample_counts[dsid]), self.sample_counts[dsid]))
+                self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.arange(self.sample_counts[dsid]) % self.n_splits) != self.validation_split_idx]
             else:
-                self.current_indices[dsid] = list(range(floor((1-self.train_split)*self.sample_counts[dsid])))
+                self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.arange(self.sample_counts[dsid]) % self.n_splits) == self.validation_split_idx]
             if self.shuffle_batch:
                 random.shuffle(self.current_indices[dsid])
         self.total_samples = sum([len(self.current_indices[dsid]) for dsid in self.current_indices.keys()])
