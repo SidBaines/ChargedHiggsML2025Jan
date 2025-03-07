@@ -17,11 +17,43 @@ def init_wandb(config):
     wandb.define_metric("train/*", step_metric="epoch")
     wandb.define_metric("val/*", step_metric="epoch")
 
+def check_valid(types, inclusion, padding_token, categorical):
+    if categorical:
+        num_in_H = {}
+        num_in_W = {}
+        assert(padding_token==5) # Only written this code for this; if ljets are split into 3=not-xbb, 5=xbb, then have to re-write this function
+        particle_type_mapping = {0:'electron', 1:'muon', 2:'neutrino', 3:'ljet', 4:'sjet'}
+        for ptype_idx in particle_type_mapping.keys():
+            num_in_H[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).to(int) * (inclusion.argmax(dim=-1)==1).to(int))).sum(dim=-1)
+            num_in_W[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).to(int) * (inclusion.argmax(dim=-1)==2).to(int))).sum(dim=-1)
+        valid_H =   ((num_in_H['electron']==0) & (num_in_H['muon']==0) & (num_in_H['neutrino']==0) & (num_in_H['sjet']==2) & (num_in_H['ljet']==0)) | \
+                    ((num_in_H['electron']==0) & (num_in_H['muon']==0) & (num_in_H['neutrino']==0) & (num_in_H['sjet']==0) & (num_in_H['ljet']==1)) 
+        valid_Wlv = ((num_in_W['electron']==1) & (num_in_W['muon']==0) & (num_in_W['neutrino']==1) & (num_in_W['sjet']==0) & (num_in_W['ljet']==0)) | \
+                    ((num_in_W['electron']==0) & (num_in_W['muon']==1) & (num_in_W['neutrino']==1) & (num_in_W['sjet']==0) & (num_in_W['ljet']==0)) 
+        valid_Wqq = ((num_in_W['electron']==0) & (num_in_W['muon']==0) & (num_in_W['neutrino']==0) & (num_in_W['sjet']==2) & (num_in_W['ljet']==0)) | \
+                    ((num_in_W['electron']==0) & (num_in_W['muon']==0) & (num_in_W['neutrino']==0) & (num_in_W['sjet']==0) & (num_in_W['ljet']==1))
+        valid = valid_H & (valid_Wlv | valid_Wqq)
+    else:
+        num_electrons=(((types == 0).to(int) * (inclusion>0).to(int))).sum(dim=-1)
+        num_muons=(((types == 1).to(int) * (inclusion>0).to(int))).sum(dim=-1)
+        num_neutrinos=(((types == 2).to(int) * (inclusion>0).to(int))).sum(dim=-1)
+        if padding_token==5: # all ljets are type==3
+            num_ljets=(((types == 3).to(int) * (inclusion>0).to(int))).sum(dim=-1)
+        elif padding_token==6: # We separated ljets into xbb type==5 and not-xbb type==3
+            num_ljets=((((types == 3).to(int) * (inclusion>0).to(int))).sum(dim=-1) + (((types == 5).to(int) * inclusion)).sum(dim=-1)).to(int)
+        num_sjets=(((types == 4).to(int) * (inclusion>0))).sum(dim=-1)
+
+        valid_lvbb = ((num_electrons+num_muons)==1) & (num_neutrinos==1) & ((num_ljets==1)|(num_sjets==2))
+        valid_qqbb = ((num_electrons+num_muons+num_neutrinos)==0) & ((num_ljets==2)|((num_ljets==1)&(num_sjets==2))|(num_sjets==4))
+        valid = valid_lvbb | valid_qqbb
+    return valid
 
 class HEPMetrics:
     def __init__(self,
                  padding_token,
-                 num_objects=22, 
+                 num_objects, 
+                 is_categorical=False,
+                 num_categories=0,
                  max_buffer_len=100000,
                  mass_bins=50, 
                  mass_range=(0, 1000), 
@@ -30,20 +62,29 @@ class HEPMetrics:
                  total_weights_per_dsid={},
                  mHLimits=[(0,1e10),(95e3, 140e3)],
                  unweighted=False,
+                 dsid_groups={}, # For measuring predictive power across different groups of processes
                  ):
         self.padding_token = padding_token
         self.num_objects = num_objects
+        self.is_categorical = is_categorical
+        if self.is_categorical:
+            assert(num_categories!=0)
+        self.num_categories = num_categories
         self.max_buffer_len = max_buffer_len
         assert(len(total_weights_per_dsid))
         self.total_weights_per_dsid = total_weights_per_dsid
         self.unweighted = unweighted
         self.DSID_MASS_MAPPING = {510115:0.8, 510116:0.9, 510117:1.0, 510118:1.2, 510119:1.4, 510120:1.6, 510121:1.8, 510122:2.0, 510123:2.5, 510124:3.0}
         self.loss = torch.nn.CrossEntropyLoss(reduction='none')
+        self.dsid_groups=dsid_groups
         self.reset()
         
     def reset(self):
         # Store all predictions and targets with weights
-        self.all_preds = torch.zeros((self.max_buffer_len, self.num_objects))
+        if self.is_categorical:
+            self.all_preds = torch.zeros((self.max_buffer_len, self.num_objects, self.num_categories))
+        else:
+            self.all_preds = torch.zeros((self.max_buffer_len, self.num_objects))
         self.all_targets = torch.zeros((self.max_buffer_len, self.num_objects))
         self.all_weights = torch.zeros(self.max_buffer_len)
         self.all_dsids = torch.zeros(self.max_buffer_len)  # to track dsid for each sample
@@ -54,6 +95,7 @@ class HEPMetrics:
             # 'accuracy' : 0,
             'cross_entropy':0,
             'full_reconstruction':0,
+            'valid_counts':0,
         }
 
     def reset_starts(self, ks=None):
@@ -118,6 +160,11 @@ class HEPMetrics:
                 metrics.update({
                     f"{prefix}/{k}_{label}": recos[k][label] for label in recos[k].keys()
                     })
+            valids = self.compute_valids()
+            self.starts['valid_counts'] = self.current_update_point
+            metrics.update({
+                f"{prefix}/validPct_{label}": valids[label] for label in valids.keys()
+                })
             metrics["epoch"] = epoch
         if save:
             wandb.log({**metrics, "epoch": epoch, "step":step}, commit=commit)
@@ -125,21 +172,74 @@ class HEPMetrics:
             print(metrics)
         return metrics
     
-    def compute_fullrecos(self):
-        idx_mask = (torch.arange(len(self.all_preds))>self.starts['full_reconstruction']) & (torch.arange(len(self.all_preds))<self.current_update_point)
-        results = {k:{} for k in ['PerfectRecoPct', 'Pct_OverPredict', 'Pct_UnderPredict', 'Pct_MisPredict']}
-        results['PerfectRecoPct']['all'] = ((((self.all_preds[idx_mask]>0)==self.all_targets[idx_mask].to(bool))|(self.all_types[idx_mask]==self.padding_token)).all(dim=-1) * self.all_weights[idx_mask]).sum() / self.all_weights[idx_mask].sum()
+    def compute_valids(self):
+        idx_mask = (torch.arange(len(self.all_preds))>self.starts['valid_counts']) & (torch.arange(len(self.all_preds))<self.current_update_point)
+        results = {}
+        mask = idx_mask
+        results['all'] = (check_valid(self.all_types[mask], self.all_preds[mask], self.padding_token, self.is_categorical) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
         for dsid in self.DSID_MASS_MAPPING.keys():
             try:
                 mask = idx_mask & (self.all_dsids==dsid)
-                results['PerfectRecoPct'][self.DSID_MASS_MAPPING[dsid]] = ((((self.all_preds[mask]>0)==self.all_targets[mask].to(bool))|(self.all_types[mask]==self.padding_token)).all(dim=-1) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
+                results[self.DSID_MASS_MAPPING[dsid]] = (check_valid(self.all_types[mask], self.all_preds[mask], self.padding_token, self.is_categorical) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
+            except:
+                results[self.DSID_MASS_MAPPING[dsid]]=0
+        for grp in self.dsid_groups.keys():
+            try:
+                mask = idx_mask & (torch.isin(self.all_dsids, self.dsid_groups[grp]))
+                results[grp] = (check_valid(self.all_types[mask], self.all_preds[mask], self.padding_token, self.is_categorical) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
+            except:
+                results[grp]=0
+        return results
+
+    def compute_fullrecos(self):
+        idx_mask = (torch.arange(len(self.all_preds))>self.starts['full_reconstruction']) & (torch.arange(len(self.all_preds))<self.current_update_point)
+        results = {k:{} for k in ['PerfectRecoPct', 'Pct_OverPredict', 'Pct_UnderPredict', 'Pct_MisPredict']}
+        mask = idx_mask
+        if self.is_categorical:
+            results['PerfectRecoPct']['all'] = (((self.all_preds.argmax(dim=-1)[mask]==((self.all_targets[mask]==1) + (self.all_targets[mask]>1)*2))|(self.all_types[mask]==self.padding_token)).all(dim=-1) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
+        else:
+            results['PerfectRecoPct']['all'] = ((((self.all_preds[mask]>0)==self.all_targets[mask].to(bool))|(self.all_types[mask]==self.padding_token)).all(dim=-1) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
+        for dsid in self.DSID_MASS_MAPPING.keys():
+            try:
+                mask = idx_mask & (self.all_dsids==dsid)
+                if self.is_categorical:
+                    results['PerfectRecoPct'][self.DSID_MASS_MAPPING[dsid]] = (((self.all_preds.argmax(dim=-1)[mask]==((self.all_targets[mask]==1)+(self.all_targets[mask]>1)*2))|(self.all_types[mask]==self.padding_token)).all(dim=-1) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
+                else:
+                    results['PerfectRecoPct'][self.DSID_MASS_MAPPING[dsid]] = ((((self.all_preds[mask]>0)==self.all_targets[mask].to(bool))|(self.all_types[mask]==self.padding_token)).all(dim=-1) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
             except:
                 results['PerfectRecoPct'][self.DSID_MASS_MAPPING[dsid]]=0
 
+            
+        for channel in ['lvbb', 'qqbb']:
+            if channel == 'lvbb': # Truth type of lepton/neutrino will be 3
+                channel_mask = (self.all_targets==3).any(dim=-1)
+            elif channel == 'qqbb': # Truth type of either small-jets or large-jet will be 2
+                channel_mask = (self.all_targets==2).any(dim=-1)
+            else:
+                assert(False)
+            mask = idx_mask & channel_mask
+            if self.is_categorical:
+                results['PerfectRecoPct'][f"all_{channel}"] = (((self.all_preds.argmax(dim=-1)[mask]==((self.all_targets[mask]==1) + (self.all_targets[mask]>1)*2))|(self.all_types[mask]==self.padding_token)).all(dim=-1) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
+            else:
+                results['PerfectRecoPct'][f"all_{channel}"] = ((((self.all_preds[mask]>0)==self.all_targets[mask].to(bool))|(self.all_types[mask]==self.padding_token)).all(dim=-1) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
+            for dsid in self.DSID_MASS_MAPPING.keys():
+                try:
+                    mask = idx_mask & (self.all_dsids==dsid) & channel_mask
+                    if self.is_categorical:
+                        results['PerfectRecoPct'][f"{self.DSID_MASS_MAPPING[dsid]}_{channel}"] = (((self.all_preds.argmax(dim=-1)[mask]==((self.all_targets[mask]==1)+(self.all_targets[mask]>1)*2))|(self.all_types[mask]==self.padding_token)).all(dim=-1) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
+                    else:
+                        results['PerfectRecoPct'][f"{self.DSID_MASS_MAPPING[dsid]}_{channel}"] = ((((self.all_preds[mask]>0)==self.all_targets[mask].to(bool))|(self.all_types[mask]==self.padding_token)).all(dim=-1) * self.all_weights[mask]).sum() / self.all_weights[mask].sum()
+                except:
+                    results['PerfectRecoPct'][f"{self.DSID_MASS_MAPPING[dsid]}_{channel}"]=0
+
         
         eligible_items = self.all_types!=self.padding_token
-        predicted_present_items = self.all_preds>0
-        true_present_items = self.all_targets!=0
+        if self.is_categorical:
+            predicted_present_items = self.all_preds.argmax(dim=-1)>0
+            true_present_items = self.all_targets!=0
+        else:
+            predicted_present_items = self.all_preds>0
+            true_present_items = self.all_targets!=0
 
 
         # print("Total eligibe items:")
@@ -158,7 +258,8 @@ class HEPMetrics:
         
         # print("Perecentage under-predicted")
         # print(((over_prediction_amount<0)*self.all_weights)[idx_mask].sum()/self.all_weights[idx_mask].sum())
-        results['Pct_UnderPredict']['all'] = ((over_prediction_amount<0)*self.all_weights)[idx_mask].sum()/self.all_weights[idx_mask].sum()
+        mask = idx_mask
+        results['Pct_UnderPredict']['all'] = ((over_prediction_amount<0)*self.all_weights)[mask].sum()/self.all_weights[mask].sum()
         for dsid in self.DSID_MASS_MAPPING.keys():
             try:
                 mask = idx_mask & (self.all_dsids==dsid)
@@ -168,7 +269,8 @@ class HEPMetrics:
 
         # print("Perecentage over-predicted")
         # print(((over_prediction_amount>0)*self.all_weights)[idx_mask].sum()/self.all_weights[idx_mask].sum())
-        results['Pct_OverPredict']['all'] = ((over_prediction_amount<0)*self.all_weights)[idx_mask].sum()/self.all_weights[idx_mask].sum()
+        mask = idx_mask
+        results['Pct_OverPredict']['all'] = ((over_prediction_amount<0)*self.all_weights)[mask].sum()/self.all_weights[mask].sum()
         for dsid in self.DSID_MASS_MAPPING.keys():
             try:
                 mask = idx_mask & (self.all_dsids==dsid)
@@ -178,11 +280,18 @@ class HEPMetrics:
         
         # print("Percentage predicted correct # but wrong")
         # print((((over_prediction_amount==0)&(~(((predicted_present_items==true_present_items)|(~eligible_items)).all(dim=-1))))*self.all_weights)[idx_mask].sum()/self.all_weights[idx_mask].sum())
-        results['Pct_MisPredict']['all'] = (((over_prediction_amount==0)&(~(((predicted_present_items==true_present_items)|(~eligible_items)).all(dim=-1))))*self.all_weights)[idx_mask].sum()/self.all_weights[idx_mask].sum()
+        mask = idx_mask
+        if self.is_categorical:
+            results['Pct_MisPredict']['all'] = (((over_prediction_amount[mask]==0)&(~(((self.all_preds[mask].argmax(dim=-1)==((self.all_targets[mask]==1)+(self.all_targets[mask]>1)*2))|(self.all_types[mask]==self.padding_token)).all(dim=-1))))*self.all_weights[mask]).sum()/self.all_weights[mask].sum()
+        else:
+            results['Pct_MisPredict']['all'] = (((over_prediction_amount[mask]==0)&(~(((self.all_preds[mask]>0)==self.all_targets[mask].to(bool))|(self.all_types[mask]==self.padding_token)).all(dim=-1)))*self.all_weights[mask]).sum()/self.all_weights[mask].sum()
         for dsid in self.DSID_MASS_MAPPING.keys():
             try:
                 mask = idx_mask & (self.all_dsids==dsid)
-                results['Pct_MisPredict'][self.DSID_MASS_MAPPING[dsid]] = (((over_prediction_amount==0)&(~(((predicted_present_items==true_present_items)|(~eligible_items)).all(dim=-1))))*self.all_weights)[mask].sum()/self.all_weights[mask].sum()
+                if self.is_categorical:
+                    results['Pct_MisPredict']['all'] = (((over_prediction_amount[mask]==0)&(~(((self.all_preds[mask].argmax(dim=-1)==((self.all_targets[mask]==1)+(self.all_targets[mask]>1)*2))|(self.all_types[mask]==self.padding_token)).all(dim=-1))))*self.all_weights[mask]).sum()/self.all_weights[mask].sum()
+                else:
+                    results['Pct_MisPredict']['all'] = (((over_prediction_amount[mask]==0)&(~(((self.all_preds[mask]>0)==self.all_targets[mask].to(bool))|(self.all_types[mask]==self.padding_token)).all(dim=-1)))*self.all_weights[mask]).sum()/self.all_weights[mask].sum()
             except:
                 results['Pct_MisPredict'][self.DSID_MASS_MAPPING[dsid]]=0
         
@@ -193,6 +302,7 @@ class HEPMetrics:
         return results
     
     def compute_loss(self):
+        return {}
         idx_mask = (torch.arange(len(self.all_preds))>self.starts['cross_entropy']) & (torch.arange(len(self.all_preds))<self.current_update_point)
         results = {'all':(self.loss(self.all_preds[idx_mask], self.all_targets[idx_mask]) * self.all_weights[idx_mask]).sum() / self.all_weights[idx_mask].sum()}
         for dsid in self.DSID_MASS_MAPPING.keys():
@@ -205,8 +315,9 @@ class HEPMetrics:
 
 # Modified loss class with wandb logging
 class HEPLoss(torch.nn.Module):
-    def __init__(self, weight_by_mH=False, alpha=1.0, target_mass=125, apply_correlation_penalty=False):
+    def __init__(self, is_categorical=False, weight_by_mH=False, alpha=1.0, target_mass=125, apply_correlation_penalty=False):
         super().__init__()
+        self.is_categorical = is_categorical
         self.ce = torch.nn.CrossEntropyLoss(reduction='none')
         self.bce = torch.nn.BCEWithLogitsLoss(reduction='none')
         self.weight_by_mH = weight_by_mH
@@ -220,8 +331,17 @@ class HEPLoss(torch.nn.Module):
         if 0: # Loss all together
             ce_loss = self.ce(inputs, targets) * weights
         else: # Loss per object
-            num_nonempty_objs = (types!=padding_token).sum(dim=-1)
-            ce_loss = self.bce(inputs.flatten(), (targets!=0).to(float).flatten()) * (einops.repeat((weights/num_nonempty_objs), 'batch -> batch max_n_objects',max_n_objects=n_objs)*(types!=padding_token)).flatten()
+            if self.is_categorical:
+                simplified_true_inclusion = ((targets==1)*1 + (targets>1)*2) # 1 is Higgs, 2/3 is W for qqbb/lvbb cases
+                one_hot_true_inclusion = torch.nn.functional.one_hot(simplified_true_inclusion.to(torch.long))
+                flattened_ce = self.ce(einops.rearrange(inputs, 'batch object cls -> (batch object) cls'),
+                                       einops.rearrange(one_hot_true_inclusion.float(), 'batch object cls -> (batch object) cls'),
+                                       )
+                num_nonempty_objs = (types!=padding_token).sum(dim=-1)
+                ce_loss = flattened_ce * (einops.repeat((weights/num_nonempty_objs), 'batch -> batch max_n_objects',max_n_objects=n_objs)*(types!=padding_token)).flatten()
+            else:
+                num_nonempty_objs = (types!=padding_token).sum(dim=-1)
+                ce_loss = self.bce(inputs.flatten(), (targets!=0).to(float).flatten()) * (einops.repeat((weights/num_nonempty_objs), 'batch -> batch max_n_objects',max_n_objects=n_objs)*(types!=padding_token)).flatten()
         
         # correlation_loss = weighted_correlation(ce_loss, (inputs[bkg,1]>inputs[bkg,2])*masses_lv[bkg] + (inputs[bkg,1]<=inputs[bkg,2])*masses_qq[bkg], weights[bkg]) ** 2
         # if self.apply_correlation_penalty:

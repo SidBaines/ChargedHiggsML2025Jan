@@ -105,6 +105,6 @@ do
     #     continue
     # fi
     echo "Running on $sample_dir"
-    bin/roo MCbase.cpp $sample_dir /data/atlas/HplusWh/20250227_v4_tmpWithTrueInclusion/
+    bin/roo MCbase.cpp $sample_dir /data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/
     # echo "     "
 done

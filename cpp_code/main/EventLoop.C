@@ -615,7 +615,7 @@ bool EventLoop::LowLevel_MatchTruthParticles(){
             if (particles.at(i1).type == 4){
                 for(int i2=i1+1; i2 < particles.size(); i2++){
                     if (particles.at(i2).type == 4){
-                        if ((i1!=best_H_sjet_idx1) || (i2!=best_H_sjet_idx2)){ // Check we're not overlapping with small-R jet h->bb if that was selected
+                        if ((i1!=best_H_sjet_idx1) && (i1!=best_H_sjet_idx2) && (i2!=best_H_sjet_idx1) && (i2!=best_H_sjet_idx2)){ // Check we're not overlapping with small-R jet h->bb if that was selected
                             // if ((abs((particles[i1].p4+particles[i2].p4).M()-80.36e3) < best_W_diff) || (best_W_diff==-1)){
                             if (((ll_truth_W.DeltaR(particles.at(i1).p4+particles.at(i2).p4)) < delta_R_TruthW) || (delta_R_TruthW==-1)){
                                 delta_R_TruthW = ll_truth_W.DeltaR(particles.at(i1).p4+particles.at(i2).p4);

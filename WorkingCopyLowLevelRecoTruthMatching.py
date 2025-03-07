@@ -50,6 +50,7 @@ save_current_script('%s'%(saveDir))
 
 # Some choices about the training process
 # Assumes that the data has already been binarised
+IS_CATEGORICAL = True
 PHI_ROTATED = True
 REMOVE_WHERE_TRUTH_WOULD_BE_CUT = True
 MODEL_ARCH="DEEPSETS_SELFATTENTION_RESIDUAL_X2"
@@ -128,9 +129,12 @@ for file_name in os.listdir(DATA_PATH):
     # if True:
     if (int(dsid) > 500000) and (int(dsid) < 600000):
         memmap_paths_train[int(dsid)] = DATA_PATH+file_name
+    else:
+        pass # Skip because we don't train the reco on bkg
     if (int(dsid) > 500000) and (int(dsid) < 600000):
-        print("For now, don't include the background even in the val set, but later we might want to add some backgorund performance logging to the Metric tracking code")
         memmap_paths_val[int(dsid)] = DATA_PATH+file_name
+    else:
+        print("For now, don't include the background even in the val set, but later we might want to add some backgorund performance logging to the Metric tracking code")
 n_splits=2
 validation_split_idx=0
 train_dataloader = ProportionalMemoryMappedDataset(
@@ -356,7 +360,7 @@ elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X2":
                 nn.Dropout(dropout_p),
                 nn.Linear(hidden_dim, hidden_dim // 2),
                 nn.ReLU(),
-                nn.Linear(hidden_dim // 2, 1)
+                nn.Linear(hidden_dim // 2, num_classes)
             )
             
         def forward(self, object_features, object_types):
@@ -432,7 +436,7 @@ elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL":
                 nn.Dropout(dropout_p),
                 nn.Linear(hidden_dim, hidden_dim // 2),
                 nn.ReLU(),
-                nn.Linear(hidden_dim // 2, 1)
+                nn.Linear(hidden_dim // 2, num_classes)
             )
             
         def forward(self, object_features, object_types):
@@ -494,7 +498,7 @@ elif MODEL_ARCH=="DEEPSETS_SELFATTENTION":
                 nn.Dropout(dropout_p),
                 nn.Linear(hidden_dim, hidden_dim // 2),
                 nn.ReLU(),
-                nn.Linear(hidden_dim // 2, 1)
+                nn.Linear(hidden_dim // 2, num_classes)
             )
             
         def forward(self, object_features, object_types):
@@ -641,6 +645,7 @@ elif MODEL_ARCH=="PARTICLE_FLOW":
             
             return self.classifier(pooled)
 elif MODEL_ARCH=="TRANSFORMER":
+    assert(False) # Need to allow this to be IS_CATEGORICAL or not (maybe have to add a classifier head)
     class MyHookedTransformer(HookedTransformer):
         def __init__(self, cfg, mass_input_layer=2, mass_hidden_dim=256, **kwargs):
             super(MyHookedTransformer, self).__init__(cfg, **kwargs)
@@ -701,7 +706,7 @@ elif MODEL_ARCH=="DEEPSETS_SELFATTENTION":
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL":
     model_cfg = {'d_model': 256, 'dropout_p': 0.2, "embedding_size":10, "num_heads":2}
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X2":
-    model_cfg = {'d_model': 256, 'dropout_p': 0.2, "embedding_size":10, "num_heads":4}
+    model_cfg = {'d_model': 256, 'dropout_p': 0.2, "embedding_size":N_CTX, "num_heads":4}
 elif MODEL_ARCH=="HYBRID_SELFATTENTION_GATED":
     model_cfg = {'d_model': 256, 'dropout_p': 0.2, "embedding_size":32, "num_heads":1}
 else:
@@ -844,11 +849,11 @@ if 0: #
     loaded_state_dict = torch.load(modelfile, map_location=torch.device(device))
     models[model_n]['model'].load_state_dict(loaded_state_dict)
 # %%
-criterion = HEPLoss(apply_correlation_penalty=True, alpha=1.0)
-train_metrics = HEPMetrics(N_CTX-1, max_n_objs_to_read, max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
-val_metrics = HEPMetrics(N_CTX-1, max_n_objs_to_read, max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), total_weights_per_dsid=val_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000])
-train_metrics_MCWts = HEPMetrics(N_CTX-1, max_n_objs_to_read, max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
-val_metrics_MCWts = HEPMetrics(N_CTX-1, max_n_objs_to_read, max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), total_weights_per_dsid=val_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000])
+criterion = HEPLoss(is_categorical=IS_CATEGORICAL, apply_correlation_penalty=True, alpha=1.0)
+train_metrics = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
+val_metrics = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), total_weights_per_dsid=val_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000])
+train_metrics_MCWts = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
+val_metrics_MCWts = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), total_weights_per_dsid=val_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000])
 global_step = 0
 total_train_samples_processed = 0
 train_loader._reset_indices()
@@ -1049,4 +1054,12 @@ for epoch in range(num_epochs):
 modelSaveDir = "%s/models/%d/"%(saveDir, model_n)
 os.makedirs(modelSaveDir, exist_ok=True)
 torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d" %(global_step) + '.pth')
+
+# %%
+inclusion = torch.nn.functional.one_hot(((x[...,-1]==1) + (x[...,-1]>1)*2).to(int))
+padding_token=N_CTX-1
+categorical=True
+print(types.shape)
+print(inclusion.shape)
+check_valid(types[:5], inclusion[:5], padding_token, categorical)
 # %%
