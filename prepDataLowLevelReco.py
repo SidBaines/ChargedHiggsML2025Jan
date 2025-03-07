@@ -22,6 +22,7 @@ from utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtE
 # %% Some basic setup
 # Some choices about the  process
 PHI_ROTATED = True
+REMOVE_WHERE_TRUTH_WOULD_BE_CUT = True
 INCLUDE_TAG_INFO = True
 TOSS_UNCERTAIN_TRUTH = True
 if not TOSS_UNCERTAIN_TRUTH:
@@ -43,8 +44,8 @@ if IS_XBB_TAGGED:
 else:
     N_CTX = 6 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
 BIN_WRITE_TYPE=np.float32
-max_n_objs = 22 # BE CAREFUL because this might change and if it does you ahve to rebinarise
-OUTPUT_DIR = '/data/atlas/baines/tmp2_LowLevelRecoTruthMatching' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '/'
+max_n_objs = 12 # BE CAREFUL because this might change and if it does you ahve to rebinarise
+OUTPUT_DIR = '/data/atlas/baines/tmp7_LowLevelRecoTruthMatching' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
 # OUTPUT_DIR = './tmp/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 if INCLUDE_TAG_INFO:
@@ -107,6 +108,18 @@ class RunningStats:
 running_stats = RunningStats(N_Real_Vars+1)
 
 # %%
+def last_true_index(arr):
+    # Apply the condition to the array
+    mask = arr!=0
+    # Flip the array along the object axis
+    flipped = np.flip(mask, axis=1)
+    # Find the first True element in the flipped array
+    first_true = np.argmax(flipped, axis=1)
+    # Calculate the last true index
+    last_true = arr.shape[1] - 1 - first_true
+    return last_true
+
+# %%
 # Main function to actually process a single file and return the arrays
 def process_single_file(filepath, max_n_objs, shuffle_objs):
     if USE_OLD_TRUTH_SETTING:
@@ -121,6 +134,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     particle_features += ['ll_particle_recoInclusion','ll_particle_trueInclusion']
     particle_features.append('ll_particle_type')
     x_part, x_event, y = read_file(filepath, 
+                                max_num_particles=100, # This should be high enough that you never end up cutting off an object which is present in the truth matching. In reality, this just needs to be 25 for the samples I have
                                 particle_features=particle_features,
                                 event_level_features=[
                                     'eventWeight',
@@ -129,6 +143,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
                                     'll_best_mWH_qqbb',
                                     'll_best_mWH_lvbb',
                                     mH_var,
+                                    'll_successful_truth_match',
                                 ],
                                 labels=['DSID', truth_var],
                                 new_inputs_labels=True
@@ -216,11 +231,15 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     mWh_qqbb = x_event[:,3]
     mWh_lvbb = x_event[:,4]
     mH = x_event[:,5]
+    successful_truth_match = x_event[:,6]
     if USE_OLD_TRUTH_SETTING:
         mH = mH*1e3
     if MET_CUT_ON:
         met = x_event[:,2]
+    
 
+    # Remove events where the truth match is not successful
+    successful_truth_match_removals = ~(successful_truth_match.astype(bool))
     # Remove events with no large-R jets and which don't pass selection category and which have too low Met Pt
     if INCLUDE_ALL_SELECTIONS:
         # selection_removals = selection_category<0
@@ -228,6 +247,12 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     else:
         selection_removals = ~((selection_category == 0) | (selection_category == 3) | (selection_category == 8) | (selection_category == 9) | (selection_category == 10))
     is_sig = ((y[:,0] > 500000) & (y[:,0] < 600000))
+    # Get rid of events where we don't keep enough objects to keep all the relevant truth objects
+    true_inclusion = x_part[:, -1, :]
+    if REMOVE_WHERE_TRUTH_WOULD_BE_CUT:
+        keeping_all_truth_removal = (last_true_index(true_inclusion!=0)>max_n_objs-1) & is_sig
+    else:
+        keeping_all_truth_removal = np.zeros_like(selection_category==0)
     if not REQUIRE_XBB:
         no_ljet = (((type_part==3)|(type_part==5)).sum(axis=1) == 0)
     else:
@@ -244,7 +269,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
         uncertain_cut = (((y[:, 1] != 1) & (y[:, 1] != 2)) & is_sig)
     else:
         uncertain_cut = np.zeros_like(no_ljet)#.astype(bool)
-    combined_removal = (no_ljet | selection_removals | low_MET | mH_cut | uncertain_cut)
+    combined_removal = (no_ljet | selection_removals | low_MET | mH_cut | uncertain_cut | keeping_all_truth_removal | succesful_truth_match_removals)
     removals = {0: (combined_removal & (~is_sig)).sum(),
                 1: (combined_removal & is_sig).sum()}
     x_part = x_part[~combined_removal]
@@ -319,7 +344,8 @@ def combine_arrays_for_writing(x_chunk, y_chunk, dsid_chunk, weights_chunk, mWh_
 types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 'Xbb_ljet'}
 # DATA_PATH='/data/atlas/HplusWh/20241218_SeparateLargeRJets_NominalWeights/'
 # DATA_PATH='/data/atlas/HplusWh/20250115_SeparateLargeRJets_NominalWeights_extrainfo_fixed/'
-DATA_PATH='/data/atlas/HplusWh/20250227_v4_tmpWithTrueInclusion/'
+# DATA_PATH='/data/atlas/HplusWh/20250227_v4_tmpWithTrueInclusion/'
+DATA_PATH='/data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/'
 MAX_CHUNK_SIZE = 100000
 # MAX_PER_DSID = {dsid : 10000000 for dsid in dsid_set}
 # MAX_PER_DSID[410470] = 100
@@ -327,6 +353,7 @@ for dsid in dsid_set:
     # if dsid <= 700341:
     # if dsid != 410470:
     if (dsid < 500000) or (dsid > 600000):
+    # if (dsid > 500000) and (dsid < 600000):
         continue
     # if '510' in str(dsid):
     #     continue

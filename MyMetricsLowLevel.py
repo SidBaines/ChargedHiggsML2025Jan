@@ -269,7 +269,11 @@ class HEPMetrics:
         # sorted_weights = self.all_weights[self.starts['sig_sel']:self.current_update_point][sort_idx]
 
         for (mH_lower, mH_upper) in self.mH_Limits:
-            mH_mask = ((self.all_mHs >= mH_lower) & (self.all_mHs <= mH_upper))[self.starts['sig_sel']:self.current_update_point].astype(float)
+            if (mH_lower == 0) and (mH_upper==10e3):
+                print("Hack to make sure we don't apply mH limits wrong")
+                mH_mask = torch.ones_like(self.all_mHs >= mH_lower)
+            else:
+                mH_mask = ((self.all_mHs >= mH_lower) & (self.all_mHs <= mH_upper))[self.starts['sig_sel']:self.current_update_point].astype(float)
             for max_bkg_level in self.max_bkg_levels:
                 # Calculate the threshold for lvbb background
                 if 1: # old, doesn't match for some reason. UPDATE Managed to get them to match, it was because I was using searchsorted which is not good when the values can go up and down

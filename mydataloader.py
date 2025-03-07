@@ -126,7 +126,7 @@ def read_file(
     table['part_energy'] = p4.energy
     table['part_mass'] = p4.mass
     if len(particle_features):
-        print(particle_features)
+        # print(particle_features)
         x_particles = np.stack([ak.to_numpy(_pad(table[n], maxlen=max_num_particles)) for n in particle_features], axis=1)
     else:
         x_particles = None

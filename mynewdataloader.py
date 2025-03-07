@@ -45,9 +45,10 @@ for x in dsid_set:
 
 class ProportionalMemoryMappedDataset:
     def __init__(self, 
+                 N_Real_Vars_In_File: int,
+                 N_Real_Vars_To_Return: int,
                  memmap_paths: Dict[int, str],  # DSID to memmap path
                  max_objs_in_memmap: int = -1,
-                 N_Real_Vars: int = 4,
                  class_proportions: Dict[int, float] = None,
                  batch_size: int = 64,
                  device: str = 'cpu',
@@ -83,6 +84,7 @@ class ProportionalMemoryMappedDataset:
         self.shuffle_batch = shuffle_batch
         self.signal_reweights = signal_reweights
         self.objs_to_output = objs_to_output
+        self.N_Real_Vars_To_Return = N_Real_Vars_To_Return
 
         # Add train/val splitting logic
         self.is_train = is_train
@@ -92,11 +94,11 @@ class ProportionalMemoryMappedDataset:
         if means is not None:
             self.means = torch.Tensor(means).to(torch.float32).unsqueeze(dim=0).unsqueeze(dim=0)
         else:
-            self.means = torch.zeros(N_Real_Vars).to(torch.float32).unsqueeze(dim=0).unsqueeze(dim=0)
+            self.means = torch.zeros(N_Real_Vars_In_File).to(torch.float32).unsqueeze(dim=0).unsqueeze(dim=0)
         if stds is not None:
             self.stds = torch.Tensor(stds).to(torch.float32).unsqueeze(dim=0).unsqueeze(dim=0)
         else:
-            self.stds = torch.ones(N_Real_Vars).to(torch.float32).unsqueeze(dim=0).unsqueeze(dim=0)
+            self.stds = torch.ones(N_Real_Vars_In_File).to(torch.float32).unsqueeze(dim=0).unsqueeze(dim=0)
 
         self.bkg_weight_sums = 0
         # self.sig_weight_sums = 0
@@ -125,7 +127,7 @@ class ProportionalMemoryMappedDataset:
                     path, 
                     dtype=np.float32,  # adjust dtype as needed
                     mode='r+', 
-                    shape=(total_samples, max_objs_in_memmap+2, N_Real_Vars+1)  # adjust shape as per your data
+                    shape=(total_samples, max_objs_in_memmap+2, N_Real_Vars_In_File+1)  # adjust shape as per your data
                 )
                 self.abs_weight_sums[dsid] = sum_abs_weights
                 self.weight_sums[dsid] = sum_weights
@@ -262,15 +264,16 @@ class ProportionalMemoryMappedDataset:
         batch_samples[:,1,0] *= batch_weight_mult_factors
         
         # Shuffle batch
-        shuffled_indices = np.arange(len(batch_samples))
-        np.random.shuffle(shuffled_indices)
-        batch_samples = batch_samples[shuffled_indices].squeeze()
-        MC_Wts = MC_Wts[shuffled_indices]
+        if self.shuffle_batch:
+            shuffled_indices = np.arange(len(batch_samples))
+            np.random.shuffle(shuffled_indices)
+            batch_samples = batch_samples[shuffled_indices].squeeze()
+            MC_Wts = MC_Wts[shuffled_indices]
 
         # Now extract the training variables, labels, masses, etc.
         # print(batch_samples)
-        x = torch.from_numpy(batch_samples[:,2:2+self.objs_to_output,1:])
-        x = (x - self.means)/self.stds
+        x = torch.from_numpy(batch_samples[:,2:2+self.objs_to_output,1:self.N_Real_Vars_To_Return+1])
+        x = (x - self.means[...,:self.N_Real_Vars_To_Return])/self.stds[...,:self.N_Real_Vars_To_Return]
         y = torch.nn.functional.one_hot(torch.from_numpy(batch_samples[:,0,0]).to(torch.long), num_classes=self.n_targets).to(torch.float)
         mH = torch.from_numpy(batch_samples[:,0,1])
         mWh_qqbb = torch.from_numpy(batch_samples[:,0,2])
