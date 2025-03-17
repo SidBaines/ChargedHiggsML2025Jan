@@ -21,7 +21,7 @@ from utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtE
 
 # %% Some basic setup
 # Some choices about the  process
-PHI_ROTATED = True
+PHI_ROTATED = False
 REMOVE_WHERE_TRUTH_WOULD_BE_CUT = True
 INCLUDE_TAG_INFO = True
 TOSS_UNCERTAIN_TRUTH = True
@@ -44,8 +44,9 @@ if IS_XBB_TAGGED:
 else:
     N_CTX = 6 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
 BIN_WRITE_TYPE=np.float32
-max_n_objs = 12 # BE CAREFUL because this might change and if it does you ahve to rebinarise
+max_n_objs = 15 # BE CAREFUL because this might change and if it does you ahve to rebinarise
 OUTPUT_DIR = '/data/atlas/baines/tmp7_LowLevelRecoTruthMatching' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
+OUTPUT_DIR = '/data/atlas/baines/20250314v1_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5_LowLevelRecoTruthMatching' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
 # OUTPUT_DIR = './tmp/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 if INCLUDE_TAG_INFO:
@@ -269,7 +270,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
         uncertain_cut = (((y[:, 1] != 1) & (y[:, 1] != 2)) & is_sig)
     else:
         uncertain_cut = np.zeros_like(no_ljet)#.astype(bool)
-    combined_removal = (no_ljet | selection_removals | low_MET | mH_cut | uncertain_cut | keeping_all_truth_removal | succesful_truth_match_removals)
+    combined_removal = (no_ljet | selection_removals | low_MET | mH_cut | uncertain_cut | keeping_all_truth_removal | successful_truth_match_removals)
     removals = {0: (combined_removal & (~is_sig)).sum(),
                 1: (combined_removal & is_sig).sum()}
     x_part = x_part[~combined_removal]
@@ -346,6 +347,7 @@ types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 
 # DATA_PATH='/data/atlas/HplusWh/20250115_SeparateLargeRJets_NominalWeights_extrainfo_fixed/'
 # DATA_PATH='/data/atlas/HplusWh/20250227_v4_tmpWithTrueInclusion/'
 DATA_PATH='/data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/'
+DATA_PATH='/data/atlas/HplusWh/20250313_WithTrueInclusion_FixedOverlapWHsjet_SmallJetCloseToLargeJetRemovalDeltaR0.5/'
 MAX_CHUNK_SIZE = 100000
 # MAX_PER_DSID = {dsid : 10000000 for dsid in dsid_set}
 # MAX_PER_DSID[410470] = 100

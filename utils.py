@@ -3,6 +3,47 @@ import torch
 import matplotlib.pyplot as plt
 import math
 from typing import List
+import matplotlib as mpl
+
+# %%
+
+def check_valid(types, inclusion, padding_token, categorical, returnTypes = False):
+    if categorical:
+        num_in_H = {}
+        num_in_W = {}
+        assert(padding_token==5) # Only written this code for this; if ljets are split into 3=not-xbb, 5=xbb, then have to re-write this function
+        particle_type_mapping = {0:'electron', 1:'muon', 2:'neutrino', 3:'ljet', 4:'sjet'}
+        for ptype_idx in particle_type_mapping.keys():
+            num_in_H[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).to(int) * (inclusion.argmax(dim=-1)==1).to(int))).sum(dim=-1)
+            num_in_W[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).to(int) * (inclusion.argmax(dim=-1)==2).to(int))).sum(dim=-1)
+        valid_H =   ((num_in_H['electron']==0) & (num_in_H['muon']==0) & (num_in_H['neutrino']==0) & (num_in_H['sjet']==2) & (num_in_H['ljet']==0)) | \
+                    ((num_in_H['electron']==0) & (num_in_H['muon']==0) & (num_in_H['neutrino']==0) & (num_in_H['sjet']==0) & (num_in_H['ljet']==1)) 
+        valid_Wlv = ((num_in_W['electron']==1) & (num_in_W['muon']==0) & (num_in_W['neutrino']==1) & (num_in_W['sjet']==0) & (num_in_W['ljet']==0)) | \
+                    ((num_in_W['electron']==0) & (num_in_W['muon']==1) & (num_in_W['neutrino']==1) & (num_in_W['sjet']==0) & (num_in_W['ljet']==0)) 
+        valid_Wqq = ((num_in_W['electron']==0) & (num_in_W['muon']==0) & (num_in_W['neutrino']==0) & (num_in_W['sjet']==2) & (num_in_W['ljet']==0)) | \
+                    ((num_in_W['electron']==0) & (num_in_W['muon']==0) & (num_in_W['neutrino']==0) & (num_in_W['sjet']==0) & (num_in_W['ljet']==1))
+        valid = valid_H & (valid_Wlv | valid_Wqq)
+        if returnTypes:
+            return valid, (valid_H & valid_Wlv).to(int) + (valid_H & valid_Wqq).to(int)*2
+    else:
+        num_electrons=(((types == 0).to(int) * (inclusion>0).to(int))).sum(dim=-1)
+        num_muons=(((types == 1).to(int) * (inclusion>0).to(int))).sum(dim=-1)
+        num_neutrinos=(((types == 2).to(int) * (inclusion>0).to(int))).sum(dim=-1)
+        if padding_token==5: # all ljets are type==3
+            num_ljets=(((types == 3).to(int) * (inclusion>0).to(int))).sum(dim=-1)
+        elif padding_token==6: # We separated ljets into xbb type==5 and not-xbb type==3
+            num_ljets=((((types == 3).to(int) * (inclusion>0).to(int))).sum(dim=-1) + (((types == 5).to(int) * inclusion)).sum(dim=-1)).to(int)
+        num_sjets=(((types == 4).to(int) * (inclusion>0))).sum(dim=-1)
+
+        valid_lvbb = ((num_electrons+num_muons)==1) & (num_neutrinos==1) & ((num_ljets==1)|(num_sjets==2))
+        valid_qqbb = ((num_electrons+num_muons+num_neutrinos)==0) & ((num_ljets==2)|((num_ljets==1)&(num_sjets==2))|(num_sjets==4))
+        valid = valid_lvbb | valid_qqbb
+        if returnTypes:
+            return valid, valid_lvbb.to(int) + valid_qqbb.to(int)*2
+    return valid
+
+
+
 
 
 # %%
@@ -115,39 +156,67 @@ def weighted_correlation(x, y, w):
 
 # %%
 # Define useful transforms for when we're reading the data in
-def Get_PtEtaPhiM_fromXYZT(obj_px, obj_py, obj_pz, obj_e):
+def Get_PtEtaPhiM_fromXYZT(obj_px, obj_py, obj_pz, obj_e, use_torch=False):
     '''
     Takes in arrays of shape (n_batch[,n_obj],) for x, y, z and t (==e) 
     of some objects and returns arrays of shape (n_batch[,n_obj],) containing 
     the Pt, Eta, Phi and M of the objects. Each element of n_batch corresponds
     to one event, and each of the n_objs represents an object in the event.
     '''
-    obj_pt = np.sqrt((obj_px ** 2 + obj_py**2))
-    obj_ptot = np.sqrt((obj_px ** 2 + obj_py**2 + obj_pz**2)) # sqrt*(x^2 + y^2 + z^2) == rho in spherical coords
-    
-    obj_cosTheta = np.empty_like(obj_px)
-    obj_cosTheta[obj_ptot==0] = 1
-    obj_cosTheta[obj_ptot!=0] = obj_pz[obj_ptot!=0]/obj_ptot[obj_ptot!=0]
+    if use_torch:
+        obj_pt = torch.sqrt((obj_px ** 2 + obj_py**2))
+        obj_ptot = torch.sqrt((obj_px ** 2 + obj_py**2 + obj_pz**2)) # sqrt*(x^2 + y^2 + z^2) == rho in spherical coords
+        
+        obj_cosTheta = torch.empty_like(obj_px)
+        obj_cosTheta[obj_ptot==0] = 1
+        obj_cosTheta[obj_ptot!=0] = obj_pz[obj_ptot!=0]/obj_ptot[obj_ptot!=0]
 
-    obj_Eta = np.empty_like(obj_px)
-    eta_valid_mask = obj_cosTheta*obj_cosTheta < 1
-    obj_Eta[eta_valid_mask] = -0.5* np.log( (1.0-obj_cosTheta[eta_valid_mask])/(1.0+obj_cosTheta[eta_valid_mask]) )
-    obj_Eta[(~eta_valid_mask) & (obj_pz==0)] = 0
-    obj_Eta[(~eta_valid_mask) & (obj_pz>0)] = np.inf
-    obj_Eta[(~eta_valid_mask) & (obj_pz<0)] = -np.inf
-    
-    obj_Phi = np.empty_like(obj_px)
-    phi_valid_mask = ~((obj_px == 0) & (obj_py == 0))
-    obj_Phi[phi_valid_mask] = np.atan2(obj_py[phi_valid_mask], obj_px[phi_valid_mask])
-    obj_Phi[~phi_valid_mask] = 0
+        obj_Eta = torch.empty_like(obj_px)
+        eta_valid_mask = obj_cosTheta*obj_cosTheta < 1
+        obj_Eta[eta_valid_mask] = -0.5* torch.log( (1.0-obj_cosTheta[eta_valid_mask])/(1.0+obj_cosTheta[eta_valid_mask]) )
+        obj_Eta[(~eta_valid_mask) & (obj_pz==0)] = 0
+        obj_Eta[(~eta_valid_mask) & (obj_pz>0)] = torch.inf
+        obj_Eta[(~eta_valid_mask) & (obj_pz<0)] = -torch.inf
+        
+        obj_Phi = torch.empty_like(obj_px)
+        phi_valid_mask = ~((obj_px == 0) & (obj_py == 0))
+        obj_Phi[phi_valid_mask] = torch.atan2(obj_py[phi_valid_mask], obj_px[phi_valid_mask])
+        obj_Phi[~phi_valid_mask] = 0
 
-    obj_Mag2 = obj_e**2 - obj_ptot**2
+        obj_Mag2 = obj_e**2 - obj_ptot**2
 
-    obj_M = np.empty_like(obj_px)
-    obj_M[obj_Mag2<0] = -np.sqrt((-obj_Mag2[obj_Mag2<0]))
-    obj_M[obj_Mag2>=0] = np.sqrt((obj_Mag2[obj_Mag2>=0]))
+        obj_M = torch.empty_like(obj_px)
+        obj_M[obj_Mag2<0] = -torch.sqrt((-obj_Mag2[obj_Mag2<0]))
+        obj_M[obj_Mag2>=0] = torch.sqrt((obj_Mag2[obj_Mag2>=0]))
 
-    return obj_pt, obj_Eta, obj_Phi, obj_M
+        return obj_pt, obj_Eta, obj_Phi, obj_M
+    else:
+        obj_pt = np.sqrt((obj_px ** 2 + obj_py**2))
+        obj_ptot = np.sqrt((obj_px ** 2 + obj_py**2 + obj_pz**2)) # sqrt*(x^2 + y^2 + z^2) == rho in spherical coords
+        
+        obj_cosTheta = np.empty_like(obj_px)
+        obj_cosTheta[obj_ptot==0] = 1
+        obj_cosTheta[obj_ptot!=0] = obj_pz[obj_ptot!=0]/obj_ptot[obj_ptot!=0]
+
+        obj_Eta = np.empty_like(obj_px)
+        eta_valid_mask = obj_cosTheta*obj_cosTheta < 1
+        obj_Eta[eta_valid_mask] = -0.5* np.log( (1.0-obj_cosTheta[eta_valid_mask])/(1.0+obj_cosTheta[eta_valid_mask]) )
+        obj_Eta[(~eta_valid_mask) & (obj_pz==0)] = 0
+        obj_Eta[(~eta_valid_mask) & (obj_pz>0)] = np.inf
+        obj_Eta[(~eta_valid_mask) & (obj_pz<0)] = -np.inf
+        
+        obj_Phi = np.empty_like(obj_px)
+        phi_valid_mask = ~((obj_px == 0) & (obj_py == 0))
+        obj_Phi[phi_valid_mask] = np.atan2(obj_py[phi_valid_mask], obj_px[phi_valid_mask])
+        obj_Phi[~phi_valid_mask] = 0
+
+        obj_Mag2 = obj_e**2 - obj_ptot**2
+
+        obj_M = np.empty_like(obj_px)
+        obj_M[obj_Mag2<0] = -np.sqrt((-obj_Mag2[obj_Mag2<0]))
+        obj_M[obj_Mag2>=0] = np.sqrt((obj_Mag2[obj_Mag2>=0]))
+
+        return obj_pt, obj_Eta, obj_Phi, obj_M
 
 # %% Temporary testing cell
 def GetXYZT_FromPtEtaPhiM(pt, eta, phi, m):

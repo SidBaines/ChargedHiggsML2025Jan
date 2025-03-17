@@ -22,8 +22,8 @@ from utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtE
 # %% Some basic setup
 # Some choices about the  process
 REMOVE_WHERE_TRUTH_WOULD_BE_CUT = False # Only want this if we are TRAINING the RECONSTRUCTION net! For predicting reco, or for training/predicting classification, we want these events to be present!
-INCLUDE_ALL_SELECTIONS = True
-INCLUDE_NEGATIVE_SELECTIONS = True
+INCLUDE_ALL_SELECTIONS = False
+INCLUDE_NEGATIVE_SELECTIONS = False
 PHI_ROTATED = True
 INCLUDE_TAG_INFO = True
 TOSS_UNCERTAIN_TRUTH = True
@@ -50,7 +50,7 @@ else:
     N_CTX = 6 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
 BIN_WRITE_TYPE=np.float32
 max_n_objs = 30 # BE CAREFUL because this might change and if it does you ahve to rebinarise
-OUTPUT_DIR = '/data/atlas/baines/20250306v1' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
+OUTPUT_DIR = '/data/atlas/baines/20250311v1' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
 # OUTPUT_DIR = './tmp/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 if INCLUDE_TAG_INFO:
@@ -357,8 +357,8 @@ types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 
 # DATA_PATH='/data/atlas/HplusWh/20241218_SeparateLargeRJets_NominalWeights/'
 # DATA_PATH='/data/atlas/HplusWh/20250115_SeparateLargeRJets_NominalWeights_extrainfo_fixed/'
 # DATA_PATH='/data/atlas/HplusWh/20250218_Cats038910_NoDeltaRReq_TagInfo/'
-DATA_PATH='/data/atlas/HplusWh/20250227_v4_tmpWithTrueInclusion/' # For background this is okay
-# DATA_PATH='/data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/' # For signal must be this!
+# DATA_PATH='/data/atlas/HplusWh/20250227_v4_tmpWithTrueInclusion/' # For background this is okay
+DATA_PATH='/data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/' # For signal must be this!
 MAX_CHUNK_SIZE = 100000
 # MAX_PER_DSID = {dsid : 10000000 for dsid in dsid_set}
 # MAX_PER_DSID[410470] = 100
@@ -369,8 +369,8 @@ for dsid in dsid_set:
     #     continue
     # if '510' in str(dsid):
     #     continue
-    # if (dsid < 500000) or (dsid > 600000): # Is background
-    if (dsid > 500000) and (dsid < 600000): # Is signal
+    if (dsid < 500000) or (dsid > 600000): # Is background
+    # if (dsid > 500000) and (dsid < 600000): # Is signal
         continue
 # for dsid in [510120]:
     # if ((500000<dsid) and (600000>dsid)) or (dsid==410470):

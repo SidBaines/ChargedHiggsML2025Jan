@@ -5,6 +5,7 @@ from matplotlib import pyplot as plt
 from sklearn.metrics import roc_curve
 from utils import weighted_correlation
 import einops
+from utils import Get_PtEtaPhiM_fromXYZT
 
 def init_wandb(config):
     wandb.init(
@@ -17,7 +18,7 @@ def init_wandb(config):
     wandb.define_metric("train/*", step_metric="epoch")
     wandb.define_metric("val/*", step_metric="epoch")
 
-def check_valid(types, inclusion, padding_token, categorical):
+def check_valid_old(types, inclusion, padding_token, categorical):
     if categorical:
         num_in_H = {}
         num_in_W = {}
@@ -46,6 +47,47 @@ def check_valid(types, inclusion, padding_token, categorical):
         valid_lvbb = ((num_electrons+num_muons)==1) & (num_neutrinos==1) & ((num_ljets==1)|(num_sjets==2))
         valid_qqbb = ((num_electrons+num_muons+num_neutrinos)==0) & ((num_ljets==2)|((num_ljets==1)&(num_sjets==2))|(num_sjets==4))
         valid = valid_lvbb | valid_qqbb
+    return valid
+
+def check_valid(types, inclusion, padding_token, categorical):
+    if categorical:
+        num_in_H = {}
+        num_in_W = {}
+        assert(padding_token == 5)  # Only written this code for this; if ljets are split into 3=not-xbb, 5=xbb, then have to re-write this function
+        particle_type_mapping = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet'}
+        for ptype_idx in particle_type_mapping.keys():
+            num_in_H[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).to(int) * (inclusion.argmax(dim=-1) == 1).to(int))).sum(dim=-1)
+            num_in_W[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).to(int) * (inclusion.argmax(dim=-1) == 2).to(int))).sum(dim=-1)
+        valid_H = ((num_in_H['electron'] == 0) * (num_in_H['muon'] == 0) * (num_in_H['neutrino'] == 0) * 
+                   ((num_in_H['sjet'] == 2) * (num_in_H['ljet'] == 0) + (num_in_H['sjet'] == 0) * (num_in_H['ljet'] == 1)))
+        valid_Wlv = (((num_in_W['electron'] == 1) + (num_in_W['muon'] == 1)) * 
+                     (num_in_W['neutrino'] == 1) * 
+                     (num_in_W['sjet'] == 0) * 
+                     (num_in_W['ljet'] == 0))
+        valid_Wqq = ((num_in_W['electron'] == 0) * 
+                     (num_in_W['muon'] == 0) * 
+                     (num_in_W['neutrino'] == 0) * 
+                     ((num_in_W['sjet'] == 2) * (num_in_W['ljet'] == 0) + 
+                      (num_in_W['sjet'] == 0) * (num_in_W['ljet'] == 1)))
+        valid = valid_H * (valid_Wlv + valid_Wqq)
+    else:
+        num_electrons = (((types == 0).to(int) * (inclusion > 0).to(int))).sum(dim=-1)
+        num_muons = (((types == 1).to(int) * (inclusion > 0).to(int))).sum(dim=-1)
+        num_neutrinos = (((types == 2).to(int) * (inclusion > 0).to(int))).sum(dim=-1)
+        if padding_token == 5:  # All ljets are type==3
+            num_ljets = (((types == 3).to(int) * (inclusion > 0).to(int))).sum(dim=-1)
+        elif padding_token == 6:  # We separated ljets into xbb type==5 and not-xbb type==3
+            num_ljets = ((((types == 3).to(int) * (inclusion > 0).to(int))).sum(dim=-1) + 
+                         (((types == 5).to(int) * inclusion)).sum(dim=-1)).to(int)
+        num_sjets = (((types == 4).to(int) * (inclusion > 0))).sum(dim=-1)
+        valid_lvbb = ((num_electrons + num_muons == 1) * 
+                      (num_neutrinos == 1) * 
+                      ((num_ljets == 1) + (num_sjets == 2)))
+        valid_qqbb = ((num_electrons + num_muons + num_neutrinos == 0) * 
+                      ((num_ljets == 2) + 
+                       ((num_ljets == 1) * (num_sjets == 2)) + 
+                       (num_sjets == 4)))
+        valid = valid_lvbb + valid_qqbb
     return valid
 
 class HEPMetrics:
@@ -315,7 +357,7 @@ class HEPMetrics:
 
 # Modified loss class with wandb logging
 class HEPLoss(torch.nn.Module):
-    def __init__(self, is_categorical=False, weight_by_mH=False, alpha=1.0, target_mass=125, apply_correlation_penalty=False):
+    def __init__(self, is_categorical=False, weight_by_mH=False, alpha=1.0, target_mass=125, apply_correlation_penalty=False, apply_valid_penalty=False, valid_penalty_weight=1.0):
         super().__init__()
         self.is_categorical = is_categorical
         self.ce = torch.nn.CrossEntropyLoss(reduction='none')
@@ -323,8 +365,10 @@ class HEPLoss(torch.nn.Module):
         self.weight_by_mH = weight_by_mH
         self.alpha = alpha
         self.apply_correlation_penalty = apply_correlation_penalty
+        self.apply_valid_penalty = apply_valid_penalty
+        self.valid_penalty_weight = valid_penalty_weight
         
-    def forward(self, inputs, targets, types, padding_token, n_objs, weights, log):
+    def forward(self, inputs, targets, types, padding_token, n_objs, weights, log, x_inputs=None):
         # if self.weight_by_mH:
         #     weights *= self.scale_loss_by_mH(mHs)
         
@@ -343,19 +387,44 @@ class HEPLoss(torch.nn.Module):
                 num_nonempty_objs = (types!=padding_token).sum(dim=-1)
                 ce_loss = self.bce(inputs.flatten(), (targets!=0).to(float).flatten()) * (einops.repeat((weights/num_nonempty_objs), 'batch -> batch max_n_objects',max_n_objects=n_objs)*(types!=padding_token)).flatten()
         
-        # correlation_loss = weighted_correlation(ce_loss, (inputs[bkg,1]>inputs[bkg,2])*masses_lv[bkg] + (inputs[bkg,1]<=inputs[bkg,2])*masses_qq[bkg], weights[bkg]) ** 2
-        # if self.apply_correlation_penalty:
-        #     total_loss = (ce_loss.sum())/(weights.sum()) + self.alpha * correlation_loss
-        # else:
-        if 1:
-            total_loss = (ce_loss.sum())/(weights.sum())
+        isvalid_loss = 1 - (check_valid(types, inputs, padding_token, self.is_categorical) * weights).sum() / weights.sum()
+
         
+        if self.is_categorical:
+            assert(x_inputs is not None)
+            unflattened_ce = (einops.rearrange(flattened_ce, '(batch object) -> batch object', batch=len(targets))*(types!=padding_token)).sum(dim=-1)
+            pred_inclusions = torch.argmax(inputs, dim=-1)
+            # corrects = (simplified_true_inclusion == pred_inclusions)
+            # all_corrects = corrects.all(dim=-1)
+            if 0:
+                fourmom = x_inputs[...,:4] * pred_inclusions.unsqueeze(-1)
+            else:
+                fourmom = x_inputs[...,:4] * targets.unsqueeze(-1)
+            # _,_,_,m=Get_PtEtaPhiM_fromXYZT(fourmom[:,0].sum(dim=-1).cpu().numpy(),fourmom[:,1].sum(dim=-1).cpu().numpy(),fourmom[:,2].sum(dim=-1).cpu().numpy(),fourmom[:,3].sum(dim=-1).cpu().numpy())
+            # _,_,_,m=Get_PtEtaPhiM_fromXYZT(fourmom[...,0].sum(dim=-1).cpu().numpy(),fourmom[...,1].sum(dim=-1).cpu().numpy(),fourmom[...,2].sum(dim=-1).cpu().numpy(),fourmom[...,3].sum(dim=-1).cpu().numpy())
+            _,_,_,m=Get_PtEtaPhiM_fromXYZT(fourmom[:,:,0].sum(axis=-1),fourmom[:,:,1].sum(axis=-1),fourmom[:,:,2].sum(axis=-1),fourmom[:,:,3].sum(axis=-1), use_torch=True)
+            correlation_loss = weighted_correlation(unflattened_ce, m, weights) ** 2
+        else:
+            if self.apply_correlation_penalty:
+                raise NotImplementedError
+            else:
+                pass
+        # correlation_loss = weighted_correlation(ce_loss, (inputs[bkg,1]>inputs[bkg,2])*masses_lv[bkg] + (inputs[bkg,1]<=inputs[bkg,2])*masses_qq[bkg], weights[bkg]) ** 2
+        
+        total_loss = (ce_loss.sum())/(weights.sum())
+        if self.apply_correlation_penalty:
+            total_loss += self.alpha * correlation_loss
+        if self.apply_valid_penalty:
+            total_loss += self.valid_penalty_weight * isvalid_loss
+
         # Log individual loss components
         if log:
             wandb.log({
                 "loss/ce": (ce_loss.sum())/(weights.sum()).item(),
-                # "loss/total_withCorrelation": (total_loss + self.alpha * correlation_loss).item(),
-                # "loss/correlation": correlation_loss.item(),
+                "loss/total_withCorrelation": ((ce_loss.sum())/(weights.sum()) + self.alpha * correlation_loss).item(),
+                "loss/total_withCorrelationAndValid": ((ce_loss.sum())/(weights.sum()) + self.alpha * correlation_loss + self.valid_penalty_weight * isvalid_loss).item(),
+                "loss/correlation": correlation_loss.item(),
+                "loss/valid": isvalid_loss.item(),
                 # "loss/lv_mass": lv_mass_loss.item()
             }, commit=False)
         

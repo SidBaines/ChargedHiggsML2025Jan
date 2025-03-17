@@ -1,3 +1,5 @@
+# %%
+DRY_RUN=False
 # %% # Load required modules
 import time
 ts = []
@@ -5,6 +7,9 @@ ts.append(time.time())
 
 import numpy as np
 import os
+os.environ['OPENBLAS_NUM_THREADS'] = '4'
+os.environ['MKL_NUM_THREADS'] = '4'
+os.environ['OMP_NUM_THREADS'] = '4'
 import torch
 from datetime import datetime
 from jaxtyping import Float
@@ -46,14 +51,18 @@ def save_current_script(destination_directory):
     destination_path = os.path.join(destination_directory, os.path.basename(current_script_path))
     shutil.copy(current_script_path, destination_path)
     print(f"This script copied to: {destination_path}")
-save_current_script('%s'%(saveDir))
+if DRY_RUN:
+    pass
+else:
+    save_current_script('%s'%(saveDir))
 
 # Some choices about the training process
 # Assumes that the data has already been binarised
 IS_CATEGORICAL = True
-PHI_ROTATED = True
+PHI_ROTATED = False
 REMOVE_WHERE_TRUTH_WOULD_BE_CUT = True
-MODEL_ARCH="DEEPSETS_SELFATTENTION_RESIDUAL_X2"
+MODEL_ARCH="DEEPSETS_RESIDUAL_VARIABLE"
+# MODEL_ARCH="DEEPSETS_RESIDUAL_LONGCLASSIFIER"
 # if not (MODEL_ARCH=="HYBRID_SELFATTENTION_GATED"):
 if True:
     # device = torch.device("mps" if torch.mps.is_available() else "cpu")
@@ -88,8 +97,8 @@ else:
     types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet'}
 USE_DROPOUT = True
 BIN_WRITE_TYPE=np.float32
-max_n_objs_in_file = 12 # BE CAREFUL because this might change and if it does you ahve to rebinarise
-max_n_objs_to_read = 12
+max_n_objs_in_file = 15 # BE CAREFUL because this might change and if it does you ahve to rebinarise
+max_n_objs_to_read = 15
 assert(max_n_objs_in_file==max_n_objs_to_read) # Otherwise we might cut off truth info
 assert(REMOVE_WHERE_TRUTH_WOULD_BE_CUT) # Otherwise we might have already cut off truth info in writing the file
 if INCLUDE_TAG_INFO:
@@ -109,6 +118,9 @@ DATA_PATH=f'/data/atlas/baines/tmp_SingleXbbSelected' + '_NotPhiRotated'*(not PH
 DATA_PATH=f'/data/atlas/baines/tmp3_LowLevelRecoTruthMatching' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + f'_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '/'
 DATA_PATH=f'/data/atlas/baines/tmp6_LowLevelRecoTruthMatching' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + f'_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '/'
 DATA_PATH=f'/data/atlas/baines/tmp7_LowLevelRecoTruthMatching' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + f'_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT + '/'
+DATA_PATH=f'/data/atlas/baines/20250313v1_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5_LowLevelRecoTruthMatching' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + f'_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT + '/'
+DATA_PATH=f'/data/atlas/baines/20250314v1_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5_LowLevelRecoTruthMatching' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + f'_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT + '/'
+
 if NORMALISE_DATA:
     means = np.load(f'{DATA_PATH}mean.npy')[1:]
     stds = np.load(f'{DATA_PATH}std.npy')[1:]
@@ -125,10 +137,11 @@ for file_name in os.listdir(DATA_PATH):
     if ('shape' in file_name) or ('npy' in file_name):
         continue
     dsid = file_name[5:11]
-    # if (int(dsid)!=510115) and (int(dsid)!=510116) and (int(dsid)!=510117):
-    # if True:
     if (int(dsid) > 500000) and (int(dsid) < 600000):
-        memmap_paths_train[int(dsid)] = DATA_PATH+file_name
+        # if (int(dsid)!=510115) and (int(dsid)!=510116) and (int(dsid)!=510117):
+        # if int(dsid)<510122:
+        if True:
+            memmap_paths_train[int(dsid)] = DATA_PATH+file_name
     else:
         pass # Skip because we don't train the reco on bkg
     if (int(dsid) > 500000) and (int(dsid) < 600000):
@@ -219,7 +232,305 @@ class LorentzInvariantFeatures(nn.Module):
         
         return torch.stack([mass_squared, pt, eta, phi], dim=-1)
 
-if MODEL_ARCH=="HYBRID_SELFATTENTION_GATED":
+if MODEL_ARCH=="DEEPSETS_BASIC":
+    class DeepSetsBasic(nn.Module):
+        def __init__(self, input_dim=5, num_classes=3, hidden_dim=256, num_heads=4, dropout_p=0.0, embedding_size=32, num_attention_blocks=3):
+            super().__init__()
+            self.num_attention_blocks = num_attention_blocks
+
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                self.invariant_features = LorentzInvariantFeatures()
+            
+            # Object type embedding
+            self.type_embedding = nn.Embedding(N_CTX, embedding_size)  # 5 object types
+            
+            # Initial per-object processing
+            self.object_net = nn.Sequential(
+                nn.Linear(input_dim + embedding_size, hidden_dim),  # All features except type + type embedding
+                nn.LayerNorm(hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim)
+            )
+            
+            # Create multiple attention blocks
+            self.attention_blocks = nn.ModuleList([
+                nn.ModuleDict({
+                    # 'self_attention': nn.MultiheadAttention(
+                    #     embed_dim=hidden_dim,
+                    #     num_heads=num_heads,
+                    #     dropout=0.0,
+                    #     batch_first=True,
+                    # ),
+                    'layer_norm': nn.LayerNorm(hidden_dim),
+                    'post_attention': nn.Sequential(
+                        nn.Linear(hidden_dim, hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(dropout_p),
+                    )
+                }) for _ in range(num_attention_blocks)
+            ])
+            # Final classification layers
+            self.classifier = nn.Sequential(
+                # nn.Linear(hidden_dim, hidden_dim),
+                # nn.ReLU(),
+                # nn.Dropout(dropout_p),
+                # nn.Linear(hidden_dim, hidden_dim // 2),
+                # nn.ReLU(),
+                # nn.Linear(hidden_dim // 2, num_classes)
+                nn.Linear(hidden_dim, num_classes)
+            )
+    
+        def forward(self, object_features, object_types):
+            # Get type embeddings and combine with features
+            type_emb = self.type_embedding(object_types)
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                invariant_features = self.invariant_features(object_features[...,:4])
+            combined = torch.cat([invariant_features, object_features[...,4:], type_emb], dim=-1)
+            # Process each object
+            object_features = self.object_net(combined)
+            # Apply attention blocks
+            for block in self.attention_blocks:
+                # Store original features for residual connection
+                # identity = object_features
+                # # Apply self-attention
+                # attention_output, _ = block['self_attention'](
+                #     object_features, object_features, object_features,
+                #     key_padding_mask=(object_types==(N_CTX-1))
+                # )
+                # # Add residual connection and normalize
+                # attention_output = identity + attention_output
+                attention_output = block['layer_norm'](object_features)
+                # Post-attention processing
+                object_features = block['post_attention'](attention_output)
+            return self.classifier(object_features)
+elif MODEL_ARCH=="TFLENS_DEEPSETS_RESIDUAL_VARIABLE":
+    class TfLensDeepsetsResidualSelfAttention(HookedTransformer):
+        def __init__(self, is_categorical, input_dim=5, num_classes=3, hidden_dim=256, num_heads=4, embedding_size=32, num_layers=3, **kwargs):
+            cfg = HookedTransformerConfig(
+                d_model=hidden_dim,
+                n_layers=num_layers,
+                d_head= hidden_dim // num_heads,
+                n_heads=num_heads,
+                normalization_type='LN',
+                n_ctx=N_CTX, # Max number of types of object per event + 1 because we want a dummy row in the embedding matrix for non-existing particles
+                d_vocab=N_Real_Vars-2, # Number of inputs per object
+                d_vocab_out=1,  # 1 because we're doing binary classification
+                d_mlp=hidden_dim,
+                attention_dir="bidirectional",  # defaults to "causal"
+                act_fn="relu",
+                use_attn_result=True,
+                device=str(device),
+                use_hook_tokens=True,
+            )
+            super(TfLensDeepsetsResidualSelfAttention, self).__init__(cfg, **kwargs)
+            
+            # Object type embedding
+            self.type_embedding = nn.Embedding(N_CTX, embedding_size)  # 5 object types
+
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                self.invariant_features = LorentzInvariantFeatures()
+            
+            # Initial per-object processing
+            self.object_net = nn.Sequential(
+                nn.Linear(input_dim + embedding_size, hidden_dim),  # All features except type + type embedding
+                nn.LayerNorm(hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim)
+            )
+            # Final classification layers
+            self.classifier = nn.Sequential(
+                # nn.Linear(hidden_dim, hidden_dim),
+                # nn.ReLU(),
+                # nn.Dropout(dropout_p),
+                # nn.Linear(hidden_dim, hidden_dim // 2),
+                # nn.ReLU(),
+                # nn.Linear(hidden_dim // 2, num_classes)
+                nn.Linear(hidden_dim, num_classes)
+            )
+            for hpn in ['hook_ObjectInputs', 'hook_LorentzInvariantObjectInputs', 'hook_ObjectTypes', 'hook_TransformerIns', 'hook_TransformerOuts']:
+                self.hook_dict[hpn] = HookPoint()
+                self.hook_dict[hpn].name = hpn
+                self.mod_dict[hpn] = self.hook_dict[hpn]
+            self.is_categorical = is_categorical
+            if self.is_categorical:
+                self.num_classes = num_classes
+            
+        def forward(self, tokens: Float[Tensor, "batch object d_input"], token_types: Float[Tensor, "batch object"], **kwargs) -> Float[Tensor, "batch d_model"]:
+            # Do the embedding of object types
+            self.hook_dict['hook_ObjectTypes'](token_types) # shape ["batch object"]
+            type_emb = self.type_embedding(token_types) #  # shape ["batch num_embedding"]
+
+            # Convert px, py, pz, E into MassSq, Pt, Eta, Phi
+            self.hook_dict['hook_ObjectInputs'](tokens)
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                invariant_features = self.invariant_features(tokens[...,:4])
+            self.hook_dict['hook_LorentzInvariantObjectInputs'](invariant_features)
+            
+            # Encode these features/token-embedding into model-dimension
+            combined = torch.cat([invariant_features, tokens[...,4:], type_emb], dim=-1)
+            object_features = self.object_net(combined)
+            self.hook_dict['hook_TransformerIns'](invariant_features)
+
+            # Run the transformer bit of this model (skipping the embedding with start_at_layer and the unambedding with stop_at_layer)
+            if ('start_at_layer'in kwargs) or ('stop_at_layer' in kwargs):
+                raise NotImplementedError
+            else:
+                if self.is_categorical:
+                    transformer_outs = super(TfLensDeepsetsResidualSelfAttention, self).forward(object_features, start_at_layer=0, stop_at_layer=-1, **kwargs)
+                    self.hook_dict['hook_TransformerOuts'](transformer_outs)
+                    return self.classifier(transformer_outs)
+                else:
+                    raise NotImplementedError
+                    # class_outs = super(MyHookedTransformer, self).forward(output, start_at_layer=0, stop_at_layer=-1, **kwargs)
+                    # return class_outs
+elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE":
+    class DeepSetsWithResidualSelfAttentionVariable(nn.Module):
+        def __init__(self, input_dim=5, num_classes=3, hidden_dim=256, num_heads=4, dropout_p=0.0, embedding_size=32, num_attention_blocks=3):
+            super().__init__()
+            self.num_attention_blocks = num_attention_blocks
+
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                self.invariant_features = LorentzInvariantFeatures()
+            
+            # Object type embedding
+            self.type_embedding = nn.Embedding(N_CTX, embedding_size)  # 5 object types
+            
+            # Initial per-object processing
+            self.object_net = nn.Sequential(
+                nn.Linear(input_dim + embedding_size, hidden_dim),  # All features except type + type embedding
+                nn.LayerNorm(hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim)
+            )
+            
+            # Create multiple attention blocks
+            self.attention_blocks = nn.ModuleList([
+                nn.ModuleDict({
+                    'self_attention': nn.MultiheadAttention(
+                        embed_dim=hidden_dim,
+                        num_heads=num_heads,
+                        dropout=0.0,
+                        batch_first=True,
+                    ),
+                    # 'layer_norm': nn.LayerNorm(hidden_dim),
+                    'post_attention': nn.Sequential(
+                        nn.Linear(hidden_dim, hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(dropout_p),
+                    )
+                }) for _ in range(num_attention_blocks)
+            ])
+            # Final classification layers
+            self.classifier = nn.Sequential(
+                # nn.Linear(hidden_dim, hidden_dim),
+                # nn.ReLU(),
+                # nn.Dropout(dropout_p),
+                # nn.Linear(hidden_dim, hidden_dim // 2),
+                # nn.ReLU(),
+                # nn.Linear(hidden_dim // 2, num_classes)
+                nn.Linear(hidden_dim, num_classes)
+            )
+    
+        def forward(self, object_features, object_types):
+            # Get type embeddings and combine with features
+            type_emb = self.type_embedding(object_types)
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                invariant_features = self.invariant_features(object_features[...,:4])
+            combined = torch.cat([invariant_features, object_features[...,4:], type_emb], dim=-1)
+            # Process each object
+            object_features = self.object_net(combined)
+            # Apply attention blocks
+            for block in self.attention_blocks:
+                # Store original features for residual connection
+                identity = object_features
+                # Apply self-attention
+                attention_output, _ = block['self_attention'](
+                    object_features, object_features, object_features,
+                    key_padding_mask=(object_types==(N_CTX-1))
+                )
+                # Add residual connection and normalize
+                attention_output = identity + attention_output
+                # attention_output = block['layer_norm'](attention_output)
+                # Post-attention processing
+                object_features = block['post_attention'](attention_output)
+            return self.classifier(object_features)
+elif MODEL_ARCH=="DEEPSETS_RESIDUAL_LONGCLASSIFIER":
+    class DeepSetsWithResidualSelfAttentionVariableLongclassifier(nn.Module):
+        def __init__(self, input_dim=5, num_classes=3, hidden_dim=256, num_heads=4, dropout_p=0.0, embedding_size=32, num_attention_blocks=3, num_classifier_layers=1):
+            super().__init__()
+            self.num_attention_blocks = num_attention_blocks
+
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                self.invariant_features = LorentzInvariantFeatures()
+            
+            # Object type embedding
+            self.type_embedding = nn.Embedding(N_CTX, embedding_size)  # 5 object types
+            
+            # Initial per-object processing
+            self.object_net = nn.Sequential(
+                nn.Linear(input_dim + embedding_size, hidden_dim),  # All features except type + type embedding
+                nn.LayerNorm(hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim)
+            )
+            
+            # Create multiple attention blocks
+            self.attention_blocks = nn.ModuleList([
+                nn.ModuleDict({
+                    'self_attention': nn.MultiheadAttention(
+                        embed_dim=hidden_dim,
+                        num_heads=num_heads,
+                        dropout=0.0,
+                        batch_first=True,
+                    ),
+                    'layer_norm': nn.LayerNorm(hidden_dim),
+                    'post_attention': nn.Sequential(
+                        nn.Linear(hidden_dim, hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(dropout_p),
+                    )
+                }) for _ in range(num_attention_blocks)
+            ])
+            # Final classification layers
+            assert(num_classifier_layers>0)
+            self.classifier = nn.Sequential(
+                *[
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Dropout(dropout_p)
+                ] + [
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.ReLU(),
+                    nn.Dropout(dropout_p)
+                ]*(num_classifier_layers-1) + [
+                    nn.Linear(hidden_dim, num_classes)
+                ]
+            )
+    
+        def forward(self, object_features, object_types):
+            # Get type embeddings and combine with features
+            type_emb = self.type_embedding(object_types)
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                invariant_features = self.invariant_features(object_features[...,:4])
+            combined = torch.cat([invariant_features, object_features[...,4:], type_emb], dim=-1)
+            # Process each object
+            object_features = self.object_net(combined)
+            # Apply attention blocks
+            for block in self.attention_blocks:
+                # Store original features for residual connection
+                identity = object_features
+                # Apply self-attention
+                attention_output, _ = block['self_attention'](
+                    object_features, object_features, object_features,
+                    key_padding_mask=(object_types==(N_CTX-1))
+                )
+                # Add residual connection and normalize
+                attention_output = identity + attention_output
+                attention_output = block['layer_norm'](attention_output)
+                # Post-attention processing
+                object_features = block['post_attention'](attention_output)
+            return self.classifier(object_features)
+elif MODEL_ARCH=="HYBRID_SELFATTENTION_GATED":
     assert(False) # Need to turn this into a classifier per object
     class HybridAttentionDeepSets(nn.Module):
         def __init__(self, input_dim=5, num_classes=3, hidden_dim=256, num_heads=4, embedding_size=32, dropout_p=0.0):
@@ -311,6 +622,120 @@ if MODEL_ARCH=="HYBRID_SELFATTENTION_GATED":
             integrated_features = self.attention_integration(combined_features)
             
             return self.classifier(integrated_features)
+elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X3":
+    # assert(False) # Need to turn this into a classifier per object
+    class DeepSetsWithResidualSelfAttentionTriple(nn.Module):
+        def __init__(self, input_dim=5, num_classes=3, hidden_dim=256, num_heads=4, dropout_p=0.0, embedding_size=32):
+            super().__init__()
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                self.invariant_features = LorentzInvariantFeatures()
+            # Object type embedding
+            self.type_embedding = nn.Embedding(N_CTX, embedding_size)  # 5 object types
+            # Initial per-object processing
+            self.object_net = nn.Sequential(
+                nn.Linear(input_dim + embedding_size, hidden_dim),  # All features except type + type embedding
+                nn.LayerNorm(hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim)
+            )
+            # Self-attention layer for object interactions
+            self.self_attention = nn.MultiheadAttention(
+                embed_dim=hidden_dim,
+                num_heads=num_heads,
+                # dropout=dropout_p/2,
+                dropout=0.0,
+                batch_first=True,
+            )
+            self.self_attention2 = nn.MultiheadAttention(
+                embed_dim=hidden_dim,
+                num_heads=num_heads,
+                # dropout=dropout_p/2,
+                dropout=0.0,
+                batch_first=True,
+            )
+            self.self_attention3 = nn.MultiheadAttention(
+                embed_dim=hidden_dim,
+                num_heads=num_heads,
+                # dropout=dropout_p/2,
+                dropout=0.0,
+                batch_first=True,
+            )
+            # Processing after attention with normalization
+            self.layer_norm = nn.LayerNorm(hidden_dim)
+            self.layer_norm2 = nn.LayerNorm(hidden_dim)
+            self.layer_norm3 = nn.LayerNorm(hidden_dim)
+            self.post_attention = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU()
+            )
+            self.post_attention2 = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU()
+            )
+            self.post_attention3 = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU()
+            )
+            # Final classification layers
+            self.classifier = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout_p),
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.ReLU(),
+                nn.Linear(hidden_dim // 2, num_classes)
+            )
+            
+        def forward(self, object_features, object_types):
+            batch_size, num_objects, feature_dim = x.shape
+            # Get type embeddings and combine with features
+            type_emb = self.type_embedding(object_types)
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                # object_features[...,:4] = self.invariant_features(object_features[...,:4])
+                invariant_features = self.invariant_features(object_features[...,:4])
+            combined = torch.cat([invariant_features, object_features[...,4:], type_emb], dim=-1)
+            # Process each object
+            object_features = self.object_net(combined)
+            # Store original features for residual connection
+            identity = object_features
+            # Apply self-attention to model interactions between objects
+            # This creates a mechanism for objects to attend to each other
+            attention_output, _ = self.self_attention(
+                object_features, object_features, object_features,
+                key_padding_mask=(object_types==(N_CTX-1))
+            )
+            # Add residual connection and normalize
+            attention_output = identity + attention_output
+            attention_output = self.layer_norm(attention_output)
+            # Post-attention processing
+            attention_output = self.post_attention(attention_output)
+            # Store original features for residual connection
+            identity2 = attention_output
+            # Apply self-attention to model interactions between objects
+            # This creates a mechanism for objects to attend to each other
+            attention_output2, _ = self.self_attention2(
+                attention_output, attention_output, attention_output,
+                key_padding_mask=(object_types==(N_CTX-1))
+            )
+            # Add residual connection and normalize
+            attention_output2 = identity2 + attention_output2
+            attention_output2 = self.layer_norm2(attention_output2)
+            # Post-attention processing
+            attention_output2 = self.post_attention2(attention_output2)
+            # Store original features for residual connection
+            identity3 = attention_output2
+            # Apply self-attention to model interactions between objects
+            # This creates a mechanism for objects to attend to each other
+            attention_output3, _ = self.self_attention3(
+                attention_output2, attention_output2, attention_output2,
+                key_padding_mask=(object_types==(N_CTX-1))
+            )
+            # Add residual connection and normalize
+            attention_output3 = identity3 + attention_output3
+            attention_output3 = self.layer_norm3(attention_output3)
+            # Post-attention processing
+            attention_output3 = self.post_attention3(attention_output3)
+            return self.classifier(attention_output3)
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X2":
     # assert(False) # Need to turn this into a classifier per object
     class DeepSetsWithResidualSelfAttentionDouble(nn.Module):
@@ -645,20 +1070,23 @@ elif MODEL_ARCH=="PARTICLE_FLOW":
             
             return self.classifier(pooled)
 elif MODEL_ARCH=="TRANSFORMER":
-    assert(False) # Need to allow this to be IS_CATEGORICAL or not (maybe have to add a classifier head)
     class MyHookedTransformer(HookedTransformer):
-        def __init__(self, cfg, mass_input_layer=2, mass_hidden_dim=256, **kwargs):
+        def __init__(self, cfg, is_categorical, num_classes=0, mass_input_layer=2, mass_hidden_dim=256, **kwargs):
             super(MyHookedTransformer, self).__init__(cfg, **kwargs)
             if USE_LORENTZ_INVARIANT_FEATURES:
                 self.invariant_features = LorentzInvariantFeatures()
-            self.hook_dict['hook_mytokens'] = HookPoint()
-            self.hook_dict['hook_mytokens'].name = 'hook_mytokens'
-            self.mod_dict['hook_mytokens'] = self.hook_dict['hook_mytokens']
+            self.hook_dict['hook_ObjectInputs'] = HookPoint()
+            self.hook_dict['hook_ObjectInputs'].name = 'hook_ObjectInputs'
+            self.mod_dict['hook_ObjectInputs'] = self.hook_dict['hook_ObjectInputs']
             self.W_Embed = nn.Parameter(torch.empty((cfg.n_ctx, cfg.d_vocab, cfg.d_model)))
             nn.init.normal_(self.W_Embed, std=0.02)
+            self.is_categorical = is_categorical
+            if self.is_categorical:
+                self.num_classes = num_classes
+            self.classifier = nn.Linear(cfg.d_model, num_classes)
             
         def forward(self, tokens: Float[Tensor, "batch object d_input"], token_types: Float[Tensor, "batch object"], **kwargs) -> Float[Tensor, "batch d_model"]:
-            self.hook_dict['hook_mytokens'](tokens)
+            self.hook_dict['hook_ObjectInputs'](tokens)
             if USE_LORENTZ_INVARIANT_FEATURES:
                 tokens[...,:4] = self.invariant_features(tokens[...,:4])
             expanded_W_E = self.W_Embed.unsqueeze(0).expand(token_types.shape[0], -1, -1, -1)
@@ -668,8 +1096,12 @@ elif MODEL_ARCH=="TRANSFORMER":
             if 'start_at_layer' in kwargs:
                 raise NotImplementedError
             else:
-                class_outs = super(MyHookedTransformer, self).forward(output, start_at_layer=0, **kwargs)
-            return class_outs
+                if self.is_categorical:
+                    class_outs = super(MyHookedTransformer, self).forward(output, start_at_layer=0, stop_at_layer=-1, **kwargs)
+                    return self.classifier(class_outs)
+                else:
+                    class_outs = super(MyHookedTransformer, self).forward(output, start_at_layer=0, stop_at_layer=-1, **kwargs)
+                    return class_outs
 else:
     assert(False)
 
@@ -680,6 +1112,8 @@ models = {}
 fit_histories = {}
 model_n = 0
 
+num_blocks_variable=5
+num_clasifierlayers_variable=8
 if MODEL_ARCH=="TRANSFORMER":
     # Create the model with the desired properties
     model_cfg = HookedTransformerConfig(
@@ -706,32 +1140,64 @@ elif MODEL_ARCH=="DEEPSETS_SELFATTENTION":
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL":
     model_cfg = {'d_model': 256, 'dropout_p': 0.2, "embedding_size":10, "num_heads":2}
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X2":
-    model_cfg = {'d_model': 256, 'dropout_p': 0.2, "embedding_size":N_CTX, "num_heads":4}
+    model_cfg = {'d_model': 256, 'dropout_p': 0.2, "embedding_size":10, "num_heads":4}
+elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X3":
+    model_cfg = {'d_model': 300, 'dropout_p': 0.2, "embedding_size":10, "num_heads":4}
+elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE":
+    model_cfg = {'d_model': 152, 'num_blocks':num_blocks_variable, 'dropout_p': 0.1, "embedding_size":10, "num_heads":2}
+elif MODEL_ARCH=="DEEPSETS_RESIDUAL_LONGCLASSIFIER":
+    model_cfg = {'num_classifyer_layers':num_clasifierlayers_variable, 'd_model': 200, 'num_blocks':num_blocks_variable, 'dropout_p': 0.0, "embedding_size":10, "num_heads":2}
 elif MODEL_ARCH=="HYBRID_SELFATTENTION_GATED":
     model_cfg = {'d_model': 256, 'dropout_p': 0.2, "embedding_size":32, "num_heads":1}
+elif MODEL_ARCH=="TFLENS_DEEPSETS_RESIDUAL_VARIABLE":
+    model_cfg = {'d_model': 256, 'dropout_p': 0.0, "embedding_size":10, "num_heads":4, "num_layers":num_blocks_variable}
+elif MODEL_ARCH=="DEEPSETS_BASIC":
+    model_cfg = {'num_blocks':num_blocks_variable, 'd_model': 300, 'dropout_p': 0.1, "embedding_size":16, "num_heads":4}
 else:
     assert(False)
+
+if IS_CATEGORICAL:
+    num_classes=3
+else:
+    num_classes=1
 
 if MODEL_ARCH=="HYBRID_SELFATTENTION_GATED":
     models[model_n] = {'model' : HybridAttentionDeepSets(input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads']).to(device)}
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL":
-    models[model_n] = {'model' : DeepSetsWithResidualSelfAttention(input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads']).to(device)}
+    models[model_n] = {'model' : DeepSetsWithResidualSelfAttention(num_classes=num_classes, input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
+elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X3":
+    models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionTriple(num_classes=num_classes, input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
+elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE":
+    models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionVariable(num_attention_blocks=model_cfg['num_blocks'], input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
+elif MODEL_ARCH=="DEEPSETS_RESIDUAL_LONGCLASSIFIER":
+    models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionVariableLongclassifier(num_classifier_layers=num_clasifierlayers_variable, num_attention_blocks=model_cfg['num_blocks'], input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X2":
-    models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionDouble(input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads']).to(device)}
+    models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionDouble(num_classes=num_classes, input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION":
-    models[model_n] = {'model' : DeepSetsWithSelfAttention(input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads']).to(device)}
+    models[model_n] = {'model' : DeepSetsWithSelfAttention(num_classes=num_classes, input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
 elif MODEL_ARCH=="DEEPSETS":
     models[model_n] = {'model' : DeepSetsWithGatedAttention(input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p']).to(device)}
 elif MODEL_ARCH=="PARTICLE_FLOW":
     models[model_n] = {'model' : LorentzInvariantParticleFlow(input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p']).to(device)}
 elif MODEL_ARCH=="TRANSFORMER":
-    models[model_n] = {'model' : MyHookedTransformer(model_cfg).to(device)}
+    if IS_CATEGORICAL:
+        models[model_n] = {'model' : MyHookedTransformer(model_cfg, IS_CATEGORICAL, num_classes=num_classes).to(device)}
+elif MODEL_ARCH=="TFLENS_DEEPSETS_RESIDUAL_VARIABLE":
+    models[model_n] = {'model' : TfLensDeepsetsResidualSelfAttention(IS_CATEGORICAL, num_layers=model_cfg['num_layers'], input_dim=N_Real_Vars-2, num_classes=num_classes, hidden_dim=model_cfg['d_model'], num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
+elif MODEL_ARCH=="DEEPSETS_BASIC":
+    models[model_n] = {'model' : DeepSetsBasic(num_attention_blocks=model_cfg['num_blocks'], input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
 else:
     assert(False)
 print(sum(p.numel() for p in models[model_n]['model'].parameters()))
 
 # %%
-if MODEL_ARCH=="TRANSFORMER":
+for p in models[model_n]['model'].named_parameters():
+    print(f"{p[0]:50s}: {p[1].numel():10d}")
+print(sum(p.numel() for p in models[model_n]['model'].parameters()))
+
+
+# %%
+if (MODEL_ARCH=="TRANSFORMER") or (MODEL_ARCH=="TFLENS_DEEPSETS_RESIDUAL_VARIABLE"):
     def add_perma_hooks_to_mask_pad_tokens(
         model: HookedTransformer
     ) -> HookedTransformer:
@@ -745,13 +1211,13 @@ if MODEL_ARCH=="TRANSFORMER":
             attn_scores: Float[Tensor, "batch head seq_Q seq_K"],
             hook: HookPoint,
         ) -> None:
-            attn_scores.masked_fill_(model.hook_dict["hook_mytokens"].ctx["padding_tokens_mask"], -1e5)
+            attn_scores.masked_fill_(model.hook_dict["hook_ObjectInputs"].ctx["padding_tokens_mask"], -1e5)
             if hook.layer() == model.cfg.n_layers - 1:
-                del model.hook_dict["hook_mytokens"].ctx["padding_tokens_mask"]
+                del model.hook_dict["hook_ObjectInputs"].ctx["padding_tokens_mask"]
 
         # Add these hooks as permanent hooks (i.e. they aren't removed after functions like run_with_hooks)
         for name, hook in model.hook_dict.items():
-            if name == "hook_mytokens":
+            if name == "hook_ObjectInputs":
                 hook.add_perma_hook(cache_padding_tokens_mask)  # type: ignore
             elif name.endswith("attn_scores"):
                 hook.add_perma_hook(apply_padding_tokens_mask)  # type: ignore
@@ -808,22 +1274,25 @@ if 0:
 
 
 # %%
-
-# %%
 model, train_loader, val_loader = models[model_n]['model'], train_dataloader, val_dataloader
 num_epochs = 30
 # log_interval = 100
 log_interval = int(50e3/batch_size)
 # longer_log_interval = log_interval*10
 longer_log_interval = 100000000000
-SAVE_MODEL_EVERY = 25
+SAVE_MODEL_EVERY = 5
 name_mapping = {"DEEPSETS":"DS", 
                 "HYBRID_SELFATTENTION_GATED":"DSSAGA", 
                 "DEEPSETS_SELFATTENTION":"DSSA", 
                 "DEEPSETS_SELFATTENTION_RESIDUAL":"DSSAR", 
                 "DEEPSETS_SELFATTENTION_RESIDUAL_X2":"DSSAR2", 
+                "DEEPSETS_SELFATTENTION_RESIDUAL_X3":"DSSAR3", 
+                "DEEPSETS_RESIDUAL_VARIABLE":f"DSSARV{num_blocks_variable}",
+                "DEEPSETS_RESIDUAL_LONGCLASSIFIER":f"DSSAR_{num_blocks_variable}B_{num_clasifierlayers_variable}CL",
                 "PARTICLE_FLOW":"PF",
                 "TRANSFORMER":"TF",
+                "TFLENS_DEEPSETS_RESIDUAL_VARIABLE":f"TLDSSARV{num_blocks_variable}",
+                "DEEPSETS_BASIC":f"DSB",
                 }
 config = {
         "learning_rate": 1e-3,
@@ -835,8 +1304,10 @@ config = {
         "batch_size": batch_size,
         "wandb":True,
         "name":"_"+timeStr+"_LowLevel_"+name_mapping[MODEL_ARCH],
-        "weight_decay":1e-10,
+        "weight_decay":1e-6,
     }
+if DRY_RUN:
+    config["wandb"] = False
 optimizer = torch.optim.Adam(models[model_n]['model'].parameters(), lr=1e-4, weight_decay=config['weight_decay'])
 if config['wandb']:
     init_wandb(config)
@@ -848,8 +1319,10 @@ if 0: #
     modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250302-224613_TrainingOutput/models/0/chkpt74_414975.pth" # DSSAR d_model=32,    d_head=8,    n_layers=8,    n_heads=8,    d_mlp=128,
     loaded_state_dict = torch.load(modelfile, map_location=torch.device(device))
     models[model_n]['model'].load_state_dict(loaded_state_dict)
+
+
 # %%
-criterion = HEPLoss(is_categorical=IS_CATEGORICAL, apply_correlation_penalty=True, alpha=1.0)
+criterion = HEPLoss(is_categorical=IS_CATEGORICAL, apply_correlation_penalty=False, alpha=1.0, apply_valid_penalty=False, valid_penalty_weight=1.0)
 train_metrics = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
 val_metrics = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), total_weights_per_dsid=val_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000])
 train_metrics_MCWts = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
@@ -898,10 +1371,19 @@ for epoch in range(num_epochs):
                 (f'blocks.{i}.hook_mlp_out', temp_hook_fn_mlp) for i in range(model.cfg.n_layers)
             ]
             ).squeeze()
+        elif (MODEL_ARCH=="TFLENS_DEEPSETS_RESIDUAL_VARIABLE") and USE_DROPOUT:
+            temp_hook_fn_attn = functools.partial(dropout_hook, p=model_cfg['dropout_p'], v=0)
+            temp_hook_fn_mlp = functools.partial(dropout_hook, p=model_cfg['dropout_p'], v=0)
+            outputs = model.run_with_hooks(x[...,:-2], types, fwd_hooks=[
+                # (f'blocks.{i}.hook_attn_out', temp_hook_fn_attn) for i in range(model.cfg.n_layers)
+            ] + [
+                (f'blocks.{i}.hook_mlp_out', temp_hook_fn_mlp) for i in range(model.cfg.n_layers)
+            ]
+            ).squeeze()
         else:
             outputs = model(x[...,:-2], types).squeeze()
         # assert(False)
-        loss = criterion(outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'])
+        loss = criterion(outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], x[...,:4])
         train_loss_epoch += loss.item() * w.sum().item()
         sum_weights_epoch += w.sum().item()
         
@@ -916,6 +1398,7 @@ for epoch in range(num_epochs):
             print('[%d/%d][%d/%d]\tLoss_C: %.4e' %(epoch, num_epochs, n_step, orig_len_train_dataloader, loss.item()))
         # Log training metrics every log_interval batches
         if ((batch_idx % log_interval) == (log_interval-1)):
+            # assert(False)
             # Log learning rate
             current_lr = optimizer.param_groups[0]['lr']
             if config['wandb']:
@@ -924,8 +1407,8 @@ for epoch in range(num_epochs):
             log_level = 2 if ((batch_idx % (longer_log_interval)) == (longer_log_interval-1)) else 0
             train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'], commit=False)
             train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'], commit=True)
-            train_metrics.reset_starts()
-            train_metrics_MCWts.reset_starts()
+            # train_metrics.reset_starts()
+            # train_metrics_MCWts.reset_starts()
     
     # if config['wandb']:
     if 1:
@@ -973,7 +1456,7 @@ for epoch in range(num_epochs):
                 # x, y, w, types, mqq, mlv, MCWts = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device), MCWts.to(device)
                 
                 outputs = model(x[...,:-2], types).squeeze()
-                loss += criterion(outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb']).sum() * w.sum()
+                loss += criterion(outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], x[...,:4]).sum() * w.sum()
                 wt_sum += w.sum()
                 val_metrics.update(outputs, x[...,-1], w, dsids, types)
                 val_metrics_MCWts.update(outputs, x[...,-1], MCWts, dsids, types)
@@ -1063,3 +1546,7 @@ print(types.shape)
 print(inclusion.shape)
 check_valid(types[:5], inclusion[:5], padding_token, categorical)
 # %%
+
+for i in model.named_parameters():
+    print(f"{i[0]}: {sum([p.numel() for p in  i[1]])}")
+# list(model.named_parameters())[0][1].numel()
