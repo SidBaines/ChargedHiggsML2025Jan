@@ -405,6 +405,7 @@ public :
    bool doCombined; // Variable read from config to allow Combined mode where the even/odd NN scores are combined into one branch
    bool WriteAllEvents; // Variable read from config to allow us to write all events (ie, not just those where the selection of 0, 3, 8, 9, 10 is passed)
    bool LowLevelDeltaRLepLjetCut; // Variable read from config to allow us to toggle whether or not the DeltaR(ljet, lep)>1.0 cut is on for the low-level particles
+   bool LowLevelDeltaRLjetSjetCut; // Variable read from config to allow us to toggle whether or not the DeltaR(ljet, sjet)>1.0 cut is on for the low-level particles
    bool LowLevelLjetPtCut; // Variable read from config to allow us to toggle whether or not the ljet Pt > 250GeV cut is on for the low-level particles
    bool LowLevelLjetMassCut; // Variable read from config to allow us to toggle whether or not the ljet mass > 50GeV  and < 250GeV cut is on for the low-level particles
    bool lightWeightMode; // Variable read from config to allow lightweight mode, which only stores a small selection of our data
@@ -1288,6 +1289,10 @@ EventLoop::EventLoop(TTree *tree, TString ExpUncertaintyName, TString outFileNam
    if (config["low_level_delta_R_lep_ljet_cut"] != "")
    {
       LowLevelDeltaRLepLjetCut = (config["low_level_delta_R_lep_ljet_cut"] == "Enable" || config["low_level_delta_R_lep_ljet_cut"] == "enable");
+   }
+   if (config["low_level_delta_R_ljet_sjet_cut"] != "")
+   {
+      LowLevelDeltaRLjetSjetCut = (config["low_level_delta_R_ljet_sjet_cut"] == "Enable" || config["low_level_delta_R_ljet_sjet_cut"] == "enable");
    }
    if (config["low_level_ljet_Pt_cut"] != "")
    {

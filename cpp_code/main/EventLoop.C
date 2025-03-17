@@ -1156,6 +1156,16 @@ bool EventLoop::LowLevel_Loop(){
     for (size_t j = 0; j < jet_pt->size(); j++) {
         Particle sjet;
         sjet.p4.SetPtEtaPhiE(jet_pt->at(j), jet_eta->at(j), jet_phi->at(j), jet_e->at(j));
+        if (LowLevelDeltaRLjetSjetCut){
+            bool tooClose = false;
+            for (const auto &ljetCand : ljetCandidates) {
+                if (fabs(ljetCand.DeltaR(sjet.p4)) < 0.5){
+                    tooClose = true;
+                    continue;
+                }
+            }
+            if (tooClose) continue;
+        } 
         sjet.type = 4;
         sjet.tagInfo = jet_DL1r->at(j);
         sjet.recoInclusion = 0;

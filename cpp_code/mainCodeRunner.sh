@@ -21,7 +21,7 @@ do
     echo $sample_dir
     # # if [[ $sample_dir != *"410470"* ]]; then
     # if [[ $sample_dir != *"510122"* ]]; then
-    if [[ $sample_dir != *"5101"* ]]; then
+    if [[ $sample_dir == *"5101"* ]]; then
         continue
     fi
     # if [[ $sample_dir != *"410470"*"r9364"* ]]; then
@@ -105,6 +105,6 @@ do
     #     continue
     # fi
     echo "Running on $sample_dir"
-    bin/roo MCbase.cpp $sample_dir /data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/
+    bin/roo MCbase.cpp $sample_dir /data/atlas/HplusWh/20250313_WithTrueInclusion_FixedOverlapWHsjet_SmallJetCloseToLargeJetRemovalDeltaR0.5/
     # echo "     "
 done

@@ -10,6 +10,7 @@ ttbarSelection = Nominal
 lightWeightMode = Disable
 do_combined_NN = Enable
 low_level_delta_R_lep_ljet_cut = Disable
+low_level_delta_R_ljet_sjet_cut = Enable
 low_level_ljet_Pt_cut = Disable
 low_level_ljet_mass_cut = Disable
 write_all_events = Enable
