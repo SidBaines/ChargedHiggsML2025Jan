@@ -661,3 +661,141 @@ def angular_separation_detector_split_by_type(model,
 
 
 
+
+
+# %%
+def get_direct_logit_attribution(model, 
+                                 cache,
+                                 truth_inclusion,
+                                #  pred_inclusion, # Can get this from logits
+                                 object_types, 
+                                 true_incl:list,
+                                 type_incl:list,
+                                 class_idx,
+                                 include_mlp=True
+                                ):
+    """
+    Perform direct logit attribution to identify which components contribute most to classification.
+    
+    Args:
+        model: The neural network model
+        cache: ActivationCache with model activations
+        class_idx: Class index to analyze (0=Neither, 1=Higgs, 2=W)
+        top_k: Number of top contributors to return
+        
+    Returns:
+        Dict of attribution scores by component
+    """
+    logits = cache["output"]
+    batch_size, num_objects, num_classes = logits.shape
+    
+    attributions = {}
+
+    mask = ((torch.isin(truth_inclusion, torch.Tensor(true_incl))) & 
+            (torch.isin(object_types, torch.Tensor(type_incl)))
+            ).to(logits.device)
+
+    class_idx = torch.full((batch_size, num_objects), class_idx, device=logits.device)
+    # Get the classifier weights for the specified class
+    classifier_weights = model.classifier[0].weight[class_idx]  # shape: [batch, object, hidden_dim]
+
+    # Compute attributions for each attention block
+    for i in range(model.num_attention_blocks):
+        # Get attention outputs
+        attn_weights = cache[f"block_{i}_attention"]["attn_weights"]
+        attn_output = cache[f"block_{i}_attention"]["attn_output"]
+        mlp_output = cache[f"block_{i}_post_attention"]['output']
+        
+        
+        # Calculate attribution per attention head
+        num_heads = attn_weights.shape[1]
+        head_attributions = []
+        
+        # Reshape attention output to separate heads
+        # For standard nn.MultiheadAttention, we need to infer head dimension
+        hidden_dim = attn_output.shape[-1]
+        head_dim = hidden_dim // num_heads
+        
+        for h in range(num_heads):
+            # Extract this head's contribution
+            # This is approximate as we don't have direct access to per-head outputs
+            head_slice = slice(h * head_dim, (h + 1) * head_dim)
+            head_output = attn_output[..., head_slice]
+            
+            # Calculate attribution (dot product with classifier weights)
+            head_attribution = torch.sum(head_output * classifier_weights[..., head_slice], dim=-1)
+            head_attributions.append(head_attribution)
+        
+        attributions[f"block_{i}_attention"] = torch.stack(head_attributions, dim=0)
+
+        # Get MLP contributions
+        attributions[f"block_{i}_mlp"] = einops.einsum(mlp_output, classifier_weights, 'batch object dmod, batch object dmod -> batch object')
+    
+    # Aggregate attributions across batches for analysis
+    aggregated = {}
+    for key, attr in attributions.items():
+        # Average across batch and objects
+        aggregated[key] = einops.einsum(attr* mask, '... batch object -> ...') / einops.einsum(mask, 'batch object ->')
+        # aggregated[key] = attr.mean(dim=(1, 2)).cpu().numpy()
+    
+    
+    conts = np.zeros((model.num_attention_blocks, num_heads + include_mlp))
+    for i in range(model.num_attention_blocks):
+        conts[i,:num_heads] = aggregated[f"block_{i}_attention"].detach().cpu().numpy()
+        if include_mlp:
+            conts[i,-1] = aggregated[f"block_{i}_mlp"].detach().cpu()
+
+    return conts
+
+def plot_logit_attributions(model, 
+                            cache,
+                            truth_inclusion,
+                            object_types, 
+                            true_incl:list,
+                            type_incl:list,
+                            include_mlp=True,
+                            TRANSPOSE=False,
+                            title=None,
+):
+    assert(isinstance(true_incl, list)) # Just because this caused problems one time with empty plots but no fail
+    assert(isinstance(type_incl, list)) # Similar check
+    if TRANSPOSE:
+        fig = plt.figure(figsize=(9,3))
+    else:
+        fig = plt.figure(figsize=(8,4))
+    vmax=0
+    r={}
+    for class_idx in range(3):
+        r[class_idx] = get_direct_logit_attribution(model, 
+                                    cache, 
+                                    truth_inclusion, 
+                                    object_types,
+                                    true_incl,
+                                    type_incl,
+                                    class_idx,
+                                    include_mlp=include_mlp
+        )
+        plt.subplot(1,3,class_idx+1)
+        vmax=max(vmax, abs(r[class_idx]).max())
+    for class_idx in range(3):
+        plt.subplot(1,3,class_idx+1)
+        if TRANSPOSE:
+            plt.imshow(r[class_idx].transpose(), cmap='PiYG', vmin=-vmax, vmax=vmax)
+        else:
+            plt.imshow(r[class_idx], cmap='PiYG', vmin=-vmax, vmax=vmax)
+        plt.title(f"Class {class_idx} DLA")
+        if TRANSPOSE and (class_idx==2):
+            plt.colorbar(fraction=0.046, pad=0.04)
+        if (not TRANSPOSE) and (class_idx==2):
+            plt.colorbar(fraction=0.066, pad=0.04)
+        if (not TRANSPOSE) and include_mlp:
+            plt.xticks(range(3), ['Head 0', 'Head 1', 'MLP'], rotation=85)
+    if title is None:
+        plt.suptitle(f"Logit attribution for true incl. {true_incl}, type {type_incl}")
+    else:
+        plt.suptitle(title)
+    if not TRANSPOSE:
+        fig.supxlabel(f"Posn in layer")
+        fig.supylabel(f"Layer #")
+    plt.tight_layout()
+    return fig

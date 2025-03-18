@@ -26,7 +26,7 @@ print(saveDir)
 IS_CATEGORICAL = True
 PHI_ROTATED = True
 REMOVE_WHERE_TRUTH_WOULD_BE_CUT = True
-MODEL_ARCH="DEEPSETS_RESIDUAL_VARIABLE"
+MODEL_ARCH="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP"
 device = "cpu"
 # device = 'mps' if torch.backends.mps.is_available() else 'cpu'
 USE_LORENTZ_INVARIANT_FEATURES = True
@@ -328,6 +328,71 @@ elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE":
                 # Post-attention processing
                 object_features = block['post_attention'](attention_output)
             return self.classifier(object_features)
+elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
+    class DeepSetsWithResidualSelfAttentionVariableTrueSkip(nn.Module):
+        def __init__(self, input_dim=5, num_classes=3, hidden_dim=256, num_heads=4, dropout_p=0.0, embedding_size=32, num_attention_blocks=3):
+            super().__init__()
+            self.num_attention_blocks = num_attention_blocks
+
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                self.invariant_features = LorentzInvariantFeatures()
+            
+            # Object type embedding
+            self.type_embedding = nn.Embedding(N_CTX, embedding_size)  # 5 object types
+            
+            # Initial per-object processing
+            self.object_net = nn.Sequential(
+                nn.Linear(input_dim + embedding_size, hidden_dim),  # All features except type + type embedding
+                nn.LayerNorm(hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim)
+            )
+            
+            # Create multiple attention blocks
+            self.attention_blocks = nn.ModuleList([
+                nn.ModuleDict({
+                    'self_attention': nn.MultiheadAttention(
+                        embed_dim=hidden_dim,
+                        num_heads=num_heads,
+                        dropout=0.0,
+                        batch_first=True,
+                    ),
+                    'post_attention': nn.Sequential(
+                        nn.Linear(hidden_dim, hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(dropout_p),
+                    )
+                }) for _ in range(num_attention_blocks)
+            ])
+            # Final classification layers
+            self.classifier = nn.Sequential(
+                nn.Linear(hidden_dim, num_classes)
+            )
+    
+        def forward(self, object_features, object_types):
+            # Get type embeddings and combine with features
+            type_emb = self.type_embedding(object_types)
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                invariant_features = self.invariant_features(object_features[...,:4])
+            combined = torch.cat([invariant_features, object_features[...,4:], type_emb], dim=-1)
+            # Process each object
+            object_features = self.object_net(combined)
+            # Apply attention blocks
+            for block in self.attention_blocks:
+                # Store original features for residual connection
+                identity = object_features
+                # Apply self-attention
+                attention_output, _ = block['self_attention'](
+                    object_features, object_features, object_features,
+                    key_padding_mask=(object_types==(N_CTX-1))
+                )
+                # Add residual connection and normalize
+                residual = identity + attention_output
+                identity = residual
+                # Post-attention processing
+                mlp_output = block['post_attention'](residual)
+                object_features = identity + mlp_output
+            return self.classifier(object_features)
 else:
     assert(False)
 
@@ -354,10 +419,15 @@ if 1: # Load a pre-trained model
             modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250313-162852_TrainingOutput/models/0/chkpt29_164550.pth"
             model_cfg = {'d_model': 200, 'dropout_p': 0.2, "embedding_size":16, "num_heads":4}
             model = DeepSetsWithResidualSelfAttentionVariable(num_attention_blocks=5, num_classes=3, input_dim=N_Real_Vars, hidden_dim=model_cfg['d_model'],  dropout_p=0.1,  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
-        else:
+        elif 0:
             modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250316-111909_TrainingOutput/models/0/chkpt19_109700.pth"
             model_cfg = {'d_model': 152, 'dropout_p': 0.1, "embedding_size":10, "num_heads":2}
             model = DeepSetsWithResidualSelfAttentionVariable(num_attention_blocks=5, num_classes=3, input_dim=N_Real_Vars, hidden_dim=model_cfg['d_model'],  dropout_p=0.1,  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
+    elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
+        if 1:
+            modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250317-194149_TrainingOutput/models/0/chkpt9_54850.pth"
+            model_cfg = {'d_model': 152, 'dropout_p': 0.1, "embedding_size":10, "num_heads":2}
+            model = DeepSetsWithResidualSelfAttentionVariableTrueSkip(num_attention_blocks=5, num_classes=3, input_dim=N_Real_Vars, hidden_dim=model_cfg['d_model'],  dropout_p=0.1,  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
     else:
         assert(False)
     loaded_state_dict = torch.load(modelfile, map_location=torch.device(device))
@@ -529,16 +599,31 @@ if COMBINE_LEPTONS_FOR_PLOTS:
 else:
     types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'large-R jet', 4: 'small-R jet', 5:'None'}
 
-for layer in range(len(model.attention_blocks)):
-    plt.figure(figsize=(6,3))
-    for head in range(model.attention_blocks[layer].self_attention.num_heads):
-        plt.subplot(1,model.attention_blocks[layer].self_attention.num_heads,head+1)
-        plt.imshow(ota[f"block_{layer}"][f"head_{head}"])
-        plt.colorbar(fraction=0.046, pad=0.04)
-        plt.xticks(list(types_dict.keys()), list(types_dict.values()), rotation=90, size=10)
-        plt.yticks(list(types_dict.keys()), list(types_dict.values()), rotation=0, size=10)
-    plt.suptitle(f"Layer: {layer}")
+if 0:
+    for layer in range(len(model.attention_blocks)):
+        plt.figure(figsize=(6,3))
+        for head in range(model.attention_blocks[layer].self_attention.num_heads):
+            plt.subplot(1,model.attention_blocks[layer].self_attention.num_heads,head+1)
+            plt.imshow(ota[f"block_{layer}"][f"head_{head}"])
+            plt.colorbar(fraction=0.046, pad=0.04)
+            plt.xticks(list(types_dict.keys()), list(types_dict.values()), rotation=90, size=10)
+            plt.yticks(list(types_dict.keys()), list(types_dict.values()), rotation=0, size=10)
+        plt.suptitle(f"Layer: {layer}")
+        plt.tight_layout()
+        plt.show()
+else:
+    plt.figure(figsize=(6,15))
+    for layer in range(len(model.attention_blocks)):
+        for head in range(model.attention_blocks[layer].self_attention.num_heads):
+            plt.subplot(len(model.attention_blocks),model.attention_blocks[layer].self_attention.num_heads,layer*model.attention_blocks[layer].self_attention.num_heads+head+1)
+            plt.imshow(ota[f"block_{layer}"][f"head_{head}"])
+            plt.colorbar(fraction=0.046, pad=0.04)
+            plt.xticks(list(types_dict.keys()), list(types_dict.values()), rotation=90, size=10)
+            plt.yticks(list(types_dict.keys()), list(types_dict.values()), rotation=0, size=10)
+            plt.title(f"Layer {layer}, Head {head}")
+    plt.suptitle("Average type attention patterns (rows are queries, cols are keys)")
     plt.tight_layout()
+    plt.savefig('tmp.pdf')
     plt.show()
 
 
@@ -760,6 +845,27 @@ elif 0:
 # %%
 # %%
 # %%
+
+for obj_type in [0,1,2]:
+    _=MechInterpUtils.plot_logit_attributions(model, cache, x[...,-1], types, [3], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2)")
+
+# %%
+for obj_type in [0,1,2]:
+    _=MechInterpUtils.plot_logit_attributions(model, cache, x[...,-1], types, [0], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2)")
+
+# %%
+for true_incl in range(3):
+    _=MechInterpUtils.plot_logit_attributions(model, cache, x[...,-1], types, [true_incl], [3])
+
+
+# %%
+for true_incl in range(3):
+    _=MechInterpUtils.plot_logit_attributions(model, cache, x[...,-1], types, [true_incl], [4])
+
+
+
+
+# %%
     
 
 
@@ -776,6 +882,7 @@ elif 0:
 
 
 # %%
+import einops
 def direct_logit_attribution_tmp(model, 
                                  cache, 
                                  x, 
@@ -783,8 +890,11 @@ def direct_logit_attribution_tmp(model,
                                 #  pred_inclusion, # Can get this from logits
                                  object_types, 
                                  padding_token,
+                                 true_incl,
+                                 type_incl,
                                  class_idx=None, 
                                  top_k=5,
+                                 scale_z=None,
                                 ):
     """
     Perform direct logit attribution to identify which components contribute most to classification.
@@ -803,15 +913,28 @@ def direct_logit_attribution_tmp(model,
     
     attributions = {}
 
-    print("WARNING HARDCODING VALUES FOR TESTING")
-    mask = ((truth_inclusion==3) & (object_types==2)).to(logits.device)
-    class_idx = 2
+    mask = ((torch.isin(truth_inclusion, torch.Tensor(true_incl))) & 
+            (torch.isin(object_types, torch.Tensor(type_incl)))
+            ).to(logits.device)
 
     # If no specific class is provided, use the predicted class
     if class_idx is None:
-        class_idx = logits.argmax(dim=-1)
+        print("Class index is None so just filling with the true class")
+        # class_idx = logits.argmax(dim=-1)
+        class_idx = (truth_inclusion==1) + (truth_inclusion>1)*2
+        class_idx_label = True
+        classifier_weights = model.classifier[0].weight[class_idx]  # shape: [hidden_dim]
     elif isinstance(class_idx, int):
+        class_idx_label = class_idx
         class_idx = torch.full((batch_size, num_objects), class_idx, device=logits.device)
+        # Get the classifier weights for the specified class
+        classifier_weights = model.classifier[0].weight[class_idx]  # shape: [hidden_dim]
+    elif isinstance(class_idx, tuple):
+        class_idx_label=f"{class_idx[0]}<-{class_idx[1]}"
+        class_idx_target = torch.full((batch_size, num_objects), class_idx[0], device=logits.device)
+        class_idx_nontarget = torch.full((batch_size, num_objects), class_idx[1], device=logits.device)
+        # Get the classifier weights for the specified class
+        classifier_weights = model.classifier[0].weight[class_idx_target] - model.classifier[0].weight[class_idx_nontarget] # shape: [hidden_dim]
     
 
 
@@ -822,8 +945,6 @@ def direct_logit_attribution_tmp(model,
         attn_weights = cache[f"block_{i}_attention"]["attn_weights"]
         attn_output = cache[f"block_{i}_attention"]["attn_output"]
         
-        # Get the classifier weights for the specified class
-        classifier_weights = model.classifier[0].weight[class_idx]  # shape: [hidden_dim]
         
         # Calculate attribution per attention head
         num_heads = attn_weights.shape[1]
@@ -850,13 +971,30 @@ def direct_logit_attribution_tmp(model,
     aggregated = {}
     for key, attr in attributions.items():
         # Average across batch and objects
-        aggregated[key] = attr.mean(dim=(1, 2)).cpu().numpy()
+        aggregated[key] = einops.einsum(attr* mask, 'head batch object -> head') / einops.einsum(mask, 'batch object ->')
+        # aggregated[key] = attr.mean(dim=(1, 2)).cpu().numpy()
     
     # Find top contributors
     all_attrs = []
     for key, attrs in aggregated.items():
         for i, attr in enumerate(attrs):
             all_attrs.append((f"{key}_head_{i}", attr))
+    
+    plt.figure(figsize=(5,4))
+    conts = np.zeros((model.num_attention_blocks, num_heads))
+    for i in range(model.num_attention_blocks):
+        conts[i] = aggregated[f"block_{i}_attention"].detach().cpu()
+    # plt.imshow(conts, cmap='RdBu')
+    if scale_z is not None:
+        plt.imshow(conts, cmap='PiYG', vmin=-scale_z, vmax=scale_z)
+    else:
+        plt.imshow(conts, cmap='PiYG')
+    # plt.imshow(conts, cmap='RdBu_r')
+    plt.title(f"Direct logit attribution for predicting class: {class_idx_label}\nAcross objects with true-assignment in {true_incl}, type in {type_incl}")
+    plt.colorbar()
+    plt.show()
+        # for h in range(num_heads):
+    #         plt.subplot(model.num_attention_blocks, num_heads, i*num_heads + h + 1)
     
     # Sort by absolute attribution
     all_attrs.sort(key=lambda x: abs(x[1]), reverse=True)
@@ -872,11 +1010,156 @@ truth_inclusion = x[:,...,-1]
 pred_inclusion=outputs.argmax(dim=-1)
 # print(f"{pred_inclusion.shape}")
 
-direct_logit_attribution_tmp(model, 
+r=direct_logit_attribution_tmp(model, 
                              cache, 
                              x[...,:4], 
                              x[...,-1], 
                             #  outputs.argmax(-1), 
                              types, 
-                             padding_token
+                             padding_token,
+                             [3],
+                             [2],
 )
+# %%
+
+r=direct_logit_attribution_tmp(model, 
+                             cache, 
+                             x[...,:4], 
+                             x[...,-1], 
+                            #  outputs.argmax(-1), 
+                             types, 
+                             padding_token,
+                             [3],
+                             [2],
+                             class_idx=2
+)
+# %%
+
+for class_idx in [2, 1, 0, (2,1), (2,0)]:
+    # for tt in [0,1,2]:
+    for tt in [2]:
+        r=direct_logit_attribution_tmp(model, 
+                                    cache, 
+                                    x[...,:4], 
+                                    x[...,-1], 
+                                    #  outputs.argmax(-1), 
+                                    types, 
+                                    padding_token,
+                                    [3], # True is present in W boson
+                                    [tt], # Type is neutrino, electron or muon
+                                    class_idx=class_idx
+        )
+
+
+for _ in range(10):
+    print('--------------------------------------------------------')
+
+for class_idx in [0, 1, 2, (0,2)]:
+    r=direct_logit_attribution_tmp(model, 
+                                cache, 
+                                x[...,:4], 
+                                x[...,-1], 
+                                #  outputs.argmax(-1), 
+                                types, 
+                                padding_token,
+                                [0], # True is NOT present in W/SM Higgs
+                                [2], # Type is neutrino
+                                class_idx=class_idx
+    )
+
+
+for _ in range(10):
+    print('--------------------------------------------------------')
+
+for class_idx in [1, 0, 2, (1,0), (1,2)]:
+    r=direct_logit_attribution_tmp(model, 
+                                cache, 
+                                x[...,:4], 
+                                x[...,-1], 
+                                #  outputs.argmax(-1), 
+                                types, 
+                                padding_token,
+                                [1], # True is SM Higgs
+                                [3], # Type is large-R jet
+                                class_idx=class_idx
+    )
+
+for _ in range(10):
+    print('--------------------------------------------------------')
+
+for class_idx in [1, 0, 2, (1,0), (1,2)]:
+    r=direct_logit_attribution_tmp(model, 
+                                cache, 
+                                x[...,:4], 
+                                x[...,-1], 
+                                #  outputs.argmax(-1), 
+                                types, 
+                                padding_token,
+                                [1], # True is SM Higgs
+                                [4], # Type is small-R jet
+                                class_idx=class_idx
+    )
+
+for _ in range(10):
+    print('--------------------------------------------------------')
+
+for class_idx in [2, 0, 1, (2,0), (2,1)]:
+    r=direct_logit_attribution_tmp(model, 
+                                cache, 
+                                x[...,:4], 
+                                x[...,-1], 
+                                #  outputs.argmax(-1), 
+                                types, 
+                                padding_token,
+                                [2], # True is W
+                                [4], # Type is small-R jet
+                                class_idx=class_idx
+    )
+
+    
+# %%
+for _ in range(100):
+    print("NEED TO ADD CODE TO EXTRACT MLP LAYERS")
+
+
+
+
+true_class = [3] # True is NOT present in W/SM Higgs
+type_incl = [2] # Type is neutrino
+plot_logit_attributions(model, cache, x[...,-1], types, [3], [2])
+
+
+# %%
+for obj_type in [0,1,2]:
+    _=plot_logit_attributions(model, cache, x[...,-1], types, [3], [obj_type])
+for _ in range(5):
+    print("---------------")
+
+# for obj_type in [0,1,2]:
+#     _=plot_logit_attributions(model, cache, x[...,-1], types, [2], [obj_type])
+# for _ in range(5):
+#     print("---------------")
+
+# for obj_type in [0,1,2]:
+#     _=plot_logit_attributions(model, cache, x[...,-1], types, [1], [obj_type])
+# for _ in range(5):
+#     print("---------------")
+
+for obj_type in [0,1,2]:
+    _=plot_logit_attributions(model, cache, x[...,-1], types, [0], [obj_type])
+for _ in range(5):
+    print("---------------")
+
+
+# %%
+for true_incl in range(3):
+    _=plot_logit_attributions(model, cache, x[...,-1], types, [true_incl], [3])
+
+
+# %%
+for true_incl in range(3):
+    _=plot_logit_attributions(model, cache, x[...,-1], types, [true_incl], [4])
+
+
+
+# %%
