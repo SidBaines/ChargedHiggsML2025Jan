@@ -23,13 +23,14 @@ from utils import Get_PtEtaPhiM_fromXYZT
 
 # %% Some basic setup
 # Some choices about the  process
+USE_ONE_NET = False
 ONLY_CORRECT_RECO_FOR_TRAINING = True # Only include the correct reco, for training low-level classification networks with *just* lvbb or qqbb reco events
 ONLY_CORRECT_TRUTH_FOR_TRAINING = True # Only include the correct truth, for training low-level classification networks with *just* lvbb or qqbb reco events
 IS_CATEGORICAL = True
 REMOVE_WHERE_TRUTH_WOULD_BE_CUT = False # Only want this if we are TRAINING the RECONSTRUCTION net! For predicting reco, or for training/predicting classification, we want these events to be present!
 INCLUDE_ALL_SELECTIONS = True
 INCLUDE_NEGATIVE_SELECTIONS = True
-PHI_ROTATED = True
+PHI_ROTATED = False
 INCLUDE_TAG_INFO = True
 TOSS_UNCERTAIN_TRUTH = True
 USE_LORENTZ_INVARIANT_FEATURES = True
@@ -56,8 +57,8 @@ else:
     N_CTX = 6 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
 BIN_WRITE_TYPE=np.float32
 max_n_objs = 30 # BE CAREFUL because if we predict with more objects than we write/read, then we may not be able to reconstruct the same mass for the H/W/H+
-max_n_objs_for_pred = 14
-OUTPUT_DIR = '/data/atlas/baines/20250311v1_AppliedRecoNNSplit' + '_RemovedWrongTruthForTraining'* ONLY_CORRECT_TRUTH_FOR_TRAINING + '_RemovedWrongRecoForTraining'*ONLY_CORRECT_RECO_FOR_TRAINING + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
+max_n_objs_for_pred = 15
+OUTPUT_DIR = '/data/atlas/baines/20250321v2_AppliedRecoNNSplit_WithEventNumbers_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5' + '_RemovedWrongTruthForTraining'* ONLY_CORRECT_TRUTH_FOR_TRAINING + '_RemovedWrongRecoForTraining'*ONLY_CORRECT_RECO_FOR_TRAINING + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
 # OUTPUT_DIR = './tmp/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 if INCLUDE_TAG_INFO:
@@ -316,7 +317,87 @@ class DeepSetsWithResidualSelfAttentionTriple(nn.Module):
         # Post-attention processing
         attention_output3 = self.post_attention3(attention_output3)
         return self.classifier(attention_output3)
+class DeepSetsWithResidualSelfAttentionVariableTrueSkip(nn.Module):
+    def __init__(self, input_dim=5, num_classes=3, hidden_dim=256, num_heads=4, dropout_p=0.0, embedding_size=32, num_attention_blocks=3, include_mlp=True, hidden_dim_mlp=None):
+        super().__init__()
+        self.num_attention_blocks = num_attention_blocks
+        self.include_mlp = include_mlp
+        if hidden_dim_mlp is None:
+            hidden_dim_mlp = hidden_dim
 
+        if USE_LORENTZ_INVARIANT_FEATURES:
+            self.invariant_features = LorentzInvariantFeatures()
+        
+        # Object type embedding
+        self.type_embedding = nn.Embedding(N_CTX, embedding_size)  # 5 object types
+        
+        # Initial per-object processing
+        self.object_net = nn.Sequential(
+            nn.Linear(input_dim + embedding_size, hidden_dim),  # All features except type + type embedding
+            nn.LayerNorm(hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+        )
+        
+        # Create multiple attention blocks
+        self.attention_blocks = nn.ModuleList([
+            nn.ModuleDict({
+                # 'layer_norm1': nn.LayerNorm(hidden_dim),
+                'self_attention': nn.MultiheadAttention(
+                    embed_dim=hidden_dim,
+                    num_heads=num_heads,
+                    dropout=0.0,
+                    batch_first=True,
+                ),
+                # 'layer_norm2': nn.LayerNorm(hidden_dim),
+                **({'post_attention': nn.Sequential(
+                    nn.Linear(hidden_dim, hidden_dim_mlp),
+                    nn.GELU(),
+                    nn.Dropout(dropout_p),
+                    nn.Linear(hidden_dim_mlp, hidden_dim),
+                )} if self.include_mlp else {})
+            }) for _ in range(num_attention_blocks)
+        ])
+        # Final classification layers
+        self.classifier = nn.Sequential(
+            # nn.Linear(hidden_dim, hidden_dim),
+            # nn.ReLU(),
+            # nn.Dropout(dropout_p),
+            # nn.Linear(hidden_dim, hidden_dim // 2),
+            # nn.ReLU(),
+            # nn.Linear(hidden_dim // 2, num_classes)
+            nn.Linear(hidden_dim, num_classes)
+        )
+
+    def forward(self, object_features, object_types):
+        # Get type embeddings and combine with features
+        type_emb = self.type_embedding(object_types)
+        if USE_LORENTZ_INVARIANT_FEATURES:
+            invariant_features = self.invariant_features(object_features[...,:4])
+        combined = torch.cat([invariant_features, object_features[...,4:], type_emb], dim=-1)
+        # Process each object
+        object_features = self.object_net(combined)
+        # Apply attention blocks
+        for block in self.attention_blocks:
+            # Store original features for residual connection
+            identity = object_features
+            # Apply self-attention
+            # normed_features = block['layer_norm1'](object_features)
+            attention_output, _ = block['self_attention'](
+                object_features, object_features, object_features,
+                key_padding_mask=(object_types==(N_CTX-1))
+            )
+            # Add residual connection and normalize
+            if self.include_mlp:
+                residual = identity + attention_output
+                identity = residual
+                # normed_mlpin = block['layer_norm2'](residual)
+                # Post-attention processing
+                mlp_output = block['post_attention'](residual)
+                object_features = identity + mlp_output
+            else:
+                object_features = identity + attention_output
+        return self.classifier(object_features)
 
 # %%
 # Create a new model
@@ -326,7 +407,14 @@ else:
     num_classes=0
 device = 'cuda'
 model_cfg = {'d_model': 256, 'dropout_p': 0.2, "embedding_size":10, "num_heads":4}
-model = DeepSetsWithResidualSelfAttentionTriple(num_classes=num_classes, input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
+DeepSetsWithResidualSelfAttentionVariableTrueSkip
+if USE_ONE_NET:
+    model = DeepSetsWithResidualSelfAttentionTriple(num_classes=num_classes, input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
+else:
+    models = {
+        0:DeepSetsWithResidualSelfAttentionVariableTrueSkip(num_attention_blocks=3, include_mlp=False, num_classes=3, input_dim=N_Real_Vars-2, hidden_dim=200,  dropout_p=0.1,  num_heads=4, embedding_size=10).to(device),
+        1:DeepSetsWithResidualSelfAttentionVariableTrueSkip(num_attention_blocks=3, include_mlp=False, num_classes=3, input_dim=N_Real_Vars-2, hidden_dim=200,  dropout_p=0.1,  num_heads=4, embedding_size=10).to(device),
+    }
 
 if 1: # 
     print("WARNING: You are starting from a semi-pre-trained model state")
@@ -334,10 +422,23 @@ if 1: #
     # modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250304-145036_TrainingOutput/models/0/chkpt163050.pth" # DSSAR d_model=32,    d_head=8,    n_layers=8,    n_heads=8,    d_mlp=128,
     # modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250305-195515_TrainingOutput/models/0/chkpt163050.pth" # DSSAR d_model=32,    d_head=8,    n_layers=8,    n_heads=8,    d_mlp=128,
     # modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250305-232917_TrainingOutput/models/0/chkpt162930.pth" # 
-    modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250307-191542_TrainingOutput/models/0/chkpt162930.pth" # DSSAR3 d_model=256, n_heads=4, num_embedding=10,
-    loaded_state_dict = torch.load(modelfile, map_location=torch.device(device))
-    model.load_state_dict(loaded_state_dict)
-    modeltag = modelfile.split('/')[-4].split('_')[0]
+    if USE_ONE_NET:
+        modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250307-191542_TrainingOutput/models/0/chkpt162930.pth" # DSSAR3 d_model=256, n_heads=4, num_embedding=10,
+        loaded_state_dict = torch.load(modelfile, map_location=torch.device(device))
+        model.load_state_dict(loaded_state_dict)
+        modeltag = modelfile.split('/')[-4].split('_')[0]
+    else:
+        modelfile1="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250321-124811_TrainingOutput/models/Nplits2_ValIdx0/chkpt9_54830.pth"
+        modelfile1="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250321-124811_TrainingOutput/models/Nplits2_ValIdx0/chkpt29_164490.pth"
+        loaded_state_dict = torch.load(modelfile1, map_location=torch.device(device))
+        models[0].load_state_dict(loaded_state_dict)
+
+        modelfile2="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250321-124953_TrainingOutput/models/Nplits2_ValIdx1/chkpt9_54880.pth"
+        modelfile2="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250321-124953_TrainingOutput/models/Nplits2_ValIdx1/chkpt29_164640.pth"
+        loaded_state_dict = torch.load(modelfile2, map_location=torch.device(device))
+        models[1].load_state_dict(loaded_state_dict)
+        modeltag = modelfile1.split('/')[-4].split('_')[0] + modelfile2.split('/')[-4].split('_')[0]
+        
 
 
 
@@ -412,8 +513,9 @@ def process_single_file(filepath, max_n_objs, shuffle_objs, target_channel):
                                     'll_best_mWH_lvbb',
                                     mH_var,
                                     'll_successful_truth_match',
+                                    'eventNumber',
                                 ],
-                                labels=['DSID', truth_var],
+                                labels=['DSID', truth_var, 'eventNumber'],
                                 new_inputs_labels=True
     )
     type_part = x_part[:,N_Real_Vars,:]
@@ -500,6 +602,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs, target_channel):
     mWh_lvbb = x_event[:,4]
     mH = x_event[:,5]
     successful_truth_match = x_event[:,6]
+    eventNumber = y[:,2]
     if USE_OLD_TRUTH_SETTING:
         mH = mH*1e3
     if MET_CUT_ON:
@@ -545,7 +648,14 @@ def process_single_file(filepath, max_n_objs, shuffle_objs, target_channel):
         num_batches = (num_samps-1)//batch_size + 1
         with torch.no_grad():
             for batch_idx in range(num_batches):
-                outputs_batch = model(torch.Tensor(einops.rearrange(x_part[batch_idx*batch_size:(batch_idx+1)*batch_size, 1:5+1, :max_n_objs_for_pred], 'b v o-> b o v')).to(device)*torch.tensor([[[1e-5, 1e-5, 1e-5, 1e-5, 1]]]).to(device), torch.Tensor(type_part[batch_idx*batch_size:(batch_idx+1)*batch_size, :max_n_objs_for_pred]).to(device).to(int)).squeeze()
+                if USE_ONE_NET:
+                    outputs_batch = model(torch.Tensor(einops.rearrange(x_part[batch_idx*batch_size:(batch_idx+1)*batch_size, 1:5+1, :max_n_objs_for_pred], 'b v o-> b o v')).to(device)*torch.tensor([[[1e-5, 1e-5, 1e-5, 1e-5, 1]]]).to(device), torch.Tensor(type_part[batch_idx*batch_size:(batch_idx+1)*batch_size, :max_n_objs_for_pred]).to(device).to(int)).squeeze()
+                else:
+                    outputs_batch0 = models[0](torch.Tensor(einops.rearrange(x_part[batch_idx*batch_size:(batch_idx+1)*batch_size, 1:5+1, :max_n_objs_for_pred], 'b v o-> b o v')).to(device)*torch.tensor([[[1e-5, 1e-5, 1e-5, 1e-5, 1]]]).to(device), torch.Tensor(type_part[batch_idx*batch_size:(batch_idx+1)*batch_size, :max_n_objs_for_pred]).to(device).to(int)).squeeze()
+                    outputs_batch1 = models[1](torch.Tensor(einops.rearrange(x_part[batch_idx*batch_size:(batch_idx+1)*batch_size, 1:5+1, :max_n_objs_for_pred], 'b v o-> b o v')).to(device)*torch.tensor([[[1e-5, 1e-5, 1e-5, 1e-5, 1]]]).to(device), torch.Tensor(type_part[batch_idx*batch_size:(batch_idx+1)*batch_size, :max_n_objs_for_pred]).to(device).to(int)).squeeze()
+                    # Now get the relevant prediction (from the net it was val set in, NOT the net it was train set in, based on eventNumber)
+                    outputs_batch = outputs_batch0 * ((torch.Tensor(eventNumber[batch_idx*batch_size:(batch_idx+1)*batch_size,])%2)==0).to(float).to(device).reshape(-1,1,1) + outputs_batch1 * ((torch.Tensor(eventNumber[batch_idx*batch_size:(batch_idx+1)*batch_size,])%2)==1).to(float).to(device).reshape(-1,1,1)
+
                 outputs[batch_idx*batch_size:(batch_idx+1)*batch_size, :max_n_objs_for_pred] = outputs_batch.cpu().numpy()
                 # pred_inclusion[batch_idx*batch_size:(batch_idx+1)*batch_size] = (outputs.argmax(dim=-1)>0).cpu().numpy()
                 valid_batch, predicted_channel_batch = check_valid(torch.Tensor(type_part[batch_idx*batch_size:(batch_idx+1)*batch_size,:max_n_objs_for_pred]), outputs_batch.cpu(), N_CTX-1, IS_CATEGORICAL, returnTypes=True)
@@ -605,6 +715,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs, target_channel):
     mH = mH[~combined_removal]
     type_part = type_part[~combined_removal]
     pred_inclusion = outputs.argmax(axis=-1)[~combined_removal]
+    eventNumber = eventNumber[~combined_removal]
     
 
     # HERE Need to write some code to store this properly
@@ -646,11 +757,11 @@ def process_single_file(filepath, max_n_objs, shuffle_objs, target_channel):
                     permuted_indices = np.random.permutation(max_n_objs)
                     # Shuffle the non-zero elements along the object dimension
                     result[i,:max_n_objs] = result[i, permuted_indices]
-        return result[:,:max_n_objs,:N_Real_Vars+2], truth_label, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH
+        return result[:,:max_n_objs,:N_Real_Vars+2], truth_label, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH, eventNumber
     else:
-        return x_part[:,:max_n_objs,:N_Real_Vars+2], truth_label, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH
+        return x_part[:,:max_n_objs,:N_Real_Vars+2], truth_label, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH, eventNumber
 
-def combine_arrays_for_writing(x_chunk, y_chunk, dsid_chunk, weights_chunk, mWh_qqbbs_chunk, mWh_lvbbs_chunk, mH_chunk):
+def combine_arrays_for_writing(x_chunk, y_chunk, dsid_chunk, weights_chunk, mWh_qqbbs_chunk, mWh_lvbbs_chunk, mH_chunk, eventNumber_chunk):
     # print(type(y_chunk))
     # print(y_chunk.shape)
     y_chunk = einops.repeat(y_chunk,'b -> b 1 nvars', nvars=x_chunk.shape[-1]).astype(BIN_WRITE_TYPE)
@@ -662,6 +773,7 @@ def combine_arrays_for_writing(x_chunk, y_chunk, dsid_chunk, weights_chunk, mWh_
     extra_info_chunk = np.zeros_like(y_chunk)
     extra_info_chunk[:, 0, 0] = weights_chunk.squeeze()
     extra_info_chunk[:, 0, 1] = dsid_chunk.squeeze()
+    extra_info_chunk[:, 0, 2] = (eventNumber_chunk%1000).squeeze() # Have to make this remainder some small-ish number, otherwise the numbers might be too big for the np.float32 and will come out as zero. Currently plan to just use for train/val split, so definitely shouldn't need more than eg. 1000
     array_to_write=np.float32(np.concatenate(
         [
             y_chunk,
@@ -681,6 +793,7 @@ types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 
 # DATA_PATH='/data/atlas/HplusWh/20250218_Cats038910_NoDeltaRReq_TagInfo/'
 DATA_PATH='/data/atlas/HplusWh/20250227_v4_tmpWithTrueInclusion/' # For background this is okay
 # DATA_PATH='/data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/' # For signal must be this!
+DATA_PATH='/data/atlas/HplusWh/20250313_WithTrueInclusion_FixedOverlapWHsjet_SmallJetCloseToLargeJetRemovalDeltaR0.5/'
 MAX_CHUNK_SIZE = 100000
 # MAX_PER_DSID = {dsid : 10000000 for dsid in dsid_set}
 # MAX_PER_DSID[410470] = 100
@@ -688,16 +801,16 @@ for dsid in dsid_set:
     for channel in ['lvbb', 'qqbb']:
         # if dsid <= 700341:
         # if dsid != 410470:
-        # if dsid < 700333:
-        #     continue
+        if dsid > 363360:
+            continue
         # if '510' in str(dsid):
         #     continue
         # if (dsid < 500000) or (dsid > 600000): # Is background
         # if (dsid < 500000) or (dsid > 600000): # Is background
-        if (dsid > 500000) and (dsid < 600000): # Is signal
-            continue
-        if dsid < 700323:
-            continue
+        # if (dsid > 500000) and (dsid < 600000): # Is signal
+        #     continue
+        # if dsid < 500000:
+        #     continue
     # for dsid in [510120]:
         # if ((500000<dsid) and (600000>dsid)) or (dsid==410470):
         # if (dsid==410470):
@@ -732,13 +845,15 @@ for dsid in dsid_set:
         mWH_qqbbs = []
         mWH_lvbbs = []
         mHs = []
+        eventNumbers = []
         current_chunk_size = 0
         total_events_written_for_sample = 0
         total_entries_written_for_sample = 0
         sum_abs_weights_written_for_sample = 0
         sum_weights_written_for_sample = 0
-        if (dsid > 500000) and (dsid<600000) and (DATA_PATH!='/data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/'):
-            assert(False)
+        # if (dsid > 500000) and (dsid<600000) and (DATA_PATH!='/data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/'):
+        #     assert(False)
+
         memmap_path = os.path.join(OUTPUT_DIR, f'dsid_{dsid}_{channel}.memmap')
         if len(all_files) > 0: # Safeguard for when there aren't any files to loop through, so we don't create an empty memmap file
             with open(memmap_path, 'wb') as f:
@@ -747,7 +862,7 @@ for dsid in dsid_set:
             # print(path)
             # if path == '/data/atlas/HplusWh/20241128_ProcessedLightNtuples/user.rhulsken.mc16_13TeV.363355.She221_ZqqZvv.TOPQ1.e5525s3126r10201p4512.Nominal_v0_1l_out_root/user.rhulsken.31944615._000001.out.root':
             #     continue
-            x_chunk, y_chunk, dsid_chunk, weights_chunk, removals_chunk, mWh_qqbb_chunk, mWh_lvbb_chunk, mH_chunk = process_single_file(filepath=path, max_n_objs=max_n_objs, shuffle_objs=SHUFFLE_OBJECTS, target_channel=channel)
+            x_chunk, y_chunk, dsid_chunk, weights_chunk, removals_chunk, mWh_qqbb_chunk, mWh_lvbb_chunk, mH_chunk, eventNumber_chunk = process_single_file(filepath=path, max_n_objs=max_n_objs, shuffle_objs=SHUFFLE_OBJECTS, target_channel=channel)
             x_parts.append(x_chunk)
             ys.append(y_chunk)
             dsids.append(dsid_chunk)
@@ -755,12 +870,13 @@ for dsid in dsid_set:
             mWH_qqbbs.append(mWh_qqbb_chunk)
             mWH_lvbbs.append(mWh_lvbb_chunk)
             mHs.append(mH_chunk)
+            eventNumbers.append(eventNumber_chunk)
             # if x_chunk.shape[0]:
             #     assert(False)
             running_stats[channel].update(x_chunk)
             current_chunk_size += x_chunk.shape[0]
             if (current_chunk_size > MAX_CHUNK_SIZE) or (file_n+1 == len(all_files)):
-                array_chunk = combine_arrays_for_writing(x_chunk=np.concatenate(x_parts, axis=0), y_chunk=np.concatenate(ys, axis=0), dsid_chunk=np.concatenate(dsids, axis=0), weights_chunk=np.concatenate(weights, axis=0), mWh_qqbbs_chunk=np.concatenate(mWH_qqbbs, axis=0), mWh_lvbbs_chunk=np.concatenate(mWH_lvbbs, axis=0), mH_chunk=np.concatenate(mHs, axis=0))
+                array_chunk = combine_arrays_for_writing(x_chunk=np.concatenate(x_parts, axis=0), y_chunk=np.concatenate(ys, axis=0), dsid_chunk=np.concatenate(dsids, axis=0), weights_chunk=np.concatenate(weights, axis=0), mWh_qqbbs_chunk=np.concatenate(mWH_qqbbs, axis=0), mWh_lvbbs_chunk=np.concatenate(mWH_lvbbs, axis=0), mH_chunk=np.concatenate(mHs, axis=0), eventNumber_chunk=np.concatenate(eventNumbers, axis=0))
                 # assert(False)
                 if array_chunk.shape[0] > 0: # Check there's actually something in there
                     # memmap = np.memmap(memmap_path, dtype=BIN_WRITE_TYPE, mode='r+', offset=total_entries_written_for_sample*array_chunk.itemsize, shape=array_chunk.shape)
@@ -781,6 +897,7 @@ for dsid in dsid_set:
                 mWH_qqbbs = []
                 mWH_lvbbs = []
                 mHs = []
+                eventNumbers = []
             removals[0]+=removals_chunk[0]
             removals[1]+=removals_chunk[1]
             nfs+=1

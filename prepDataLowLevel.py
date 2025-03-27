@@ -21,11 +21,11 @@ from utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtE
 
 # %% Some basic setup
 # Some choices about the  process
-REMOVE_WHERE_TRUTH_WOULD_BE_CUT = False # Only want this if we are TRAINING the RECONSTRUCTION net! For predicting reco, or for training/predicting classification, we want these events to be present!
-INCLUDE_ALL_SELECTIONS = False
-INCLUDE_NEGATIVE_SELECTIONS = False
-PHI_ROTATED = True
-INCLUDE_TAG_INFO = True
+REMOVE_WHERE_TRUTH_WOULD_BE_CUT = True # Only want this if we are TRAINING the RECONSTRUCTION net! For predicting reco, or for training/predicting classification, we want these events to be present!
+INCLUDE_ALL_SELECTIONS = True # Probably want this true nowadays, unless comparing to old method
+INCLUDE_NEGATIVE_SELECTIONS = True # Probably want this true nowadays, unless comparing to old method
+PHI_ROTATED = False # This might help, it might not 
+INCLUDE_TAG_INFO = True # This is very helpful variable (esp for Xbb large-R jet)
 TOSS_UNCERTAIN_TRUTH = True
 if not TOSS_UNCERTAIN_TRUTH:
     raise NotImplementedError # Need to work out what to do (eg. put in a flag so they're not used as training?)
@@ -49,17 +49,17 @@ if IS_XBB_TAGGED:
 else:
     N_CTX = 6 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
 BIN_WRITE_TYPE=np.float32
-max_n_objs = 30 # BE CAREFUL because this might change and if it does you ahve to rebinarise
-OUTPUT_DIR = '/data/atlas/baines/20250311v1' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
+max_n_objs = 15 # BE CAREFUL because this might change and if it does you ahve to rebinarise
+OUTPUT_DIR = '/data/atlas/baines/20250321v1_WithEventNumbers_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
 # OUTPUT_DIR = './tmp/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 if INCLUDE_TAG_INFO:
-    N_Real_Vars=5 # px, py, pz, energy, tagInfo, recoInclusion.  BE CAREFUL because this might change and if it does you ahve to rebinarise
+    N_Real_Vars=5 # px, py, pz, energy, tagInfo.  BE CAREFUL because this might change and if it does you ahve to rebinarise
 else:
-    N_Real_Vars=4 # px, py, pz, energy, trueInclusion.  BE CAREFUL because this might change and if it does you ahve to rebinarise
+    N_Real_Vars=4 # px, py, pz, energy.  BE CAREFUL because this might change and if it does you ahve to rebinarise
 INCLUDE_INCLUSION_TAGS = True # This is only for newer files which contain these tags
 if INCLUDE_INCLUSION_TAGS:
-    N_Real_Vars += 2
+    N_Real_Vars += 2 # Also tags for recoInclusion (whether this is included in the 'naive' reconstruction), and tags for trueInclusion (whether this is included in the truth-matched reconstruction; to be used as labels for the reconstruction network and to recreate the masses). 0 is not included, 1 is included in SM Higgs from H+, 2 is included from W_hadronic from H+, 3 is included from W_leptonic from H+
 # Create a mapping from the dsid/decay-type pair to integers, for the purposes of binarising data.
 dsid_set = np.array([363355,363356,363357,363358,363359,363360,363489,407342,407343,407344,
             407348,407349,410470,410646,410647,410654,410655,411073,411074,411075,
@@ -155,6 +155,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
                                     'll_best_mWH_lvbb',
                                     mH_var,
                                     'll_successful_truth_match',
+                                    'eventNumber',
                                 ],
                                 labels=['DSID', truth_var],
                                 new_inputs_labels=True
@@ -243,6 +244,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     mWh_lvbb = x_event[:,4]
     mH = x_event[:,5]
     successful_truth_match = x_event[:,6]
+    eventNumber = x_event[:,7]
     if USE_OLD_TRUTH_SETTING:
         mH = mH*1e3
     if MET_CUT_ON:
@@ -291,6 +293,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     mWh_lvbb = mWh_lvbb[~combined_removal]
     mH = mH[~combined_removal]
     type_part = type_part[~combined_removal]
+    eventNumber = eventNumber[~combined_removal]
     
 
     # HERE Need to write some code to store this properly
@@ -324,11 +327,11 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
                     permuted_indices = np.random.permutation(max_n_objs)
                     # Shuffle the non-zero elements along the object dimension
                     result[i,:max_n_objs] = result[i, permuted_indices]
-        return result[:,:max_n_objs,:N_Real_Vars+1], truth_label, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH
+        return result[:,:max_n_objs,:N_Real_Vars+1], truth_label, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH, eventNumber
     else:
-        return x_part[:,:max_n_objs,:N_Real_Vars+1], truth_label, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH
+        return x_part[:,:max_n_objs,:N_Real_Vars+1], truth_label, dsid, event_weights, removals, mWh_qqbb, mWh_lvbb, mH, eventNumber
 
-def combine_arrays_for_writing(x_chunk, y_chunk, dsid_chunk, weights_chunk, mWh_qqbbs_chunk, mWh_lvbbs_chunk, mH_chunk):
+def combine_arrays_for_writing(x_chunk, y_chunk, dsid_chunk, weights_chunk, mWh_qqbbs_chunk, mWh_lvbbs_chunk, mH_chunk, eventNumber_chunk):
     # print(type(y_chunk))
     # print(y_chunk.shape)
     y_chunk = einops.repeat(y_chunk,'b -> b 1 nvars', nvars=x_chunk.shape[-1]).astype(BIN_WRITE_TYPE)
@@ -340,6 +343,7 @@ def combine_arrays_for_writing(x_chunk, y_chunk, dsid_chunk, weights_chunk, mWh_
     extra_info_chunk = np.zeros_like(y_chunk)
     extra_info_chunk[:, 0, 0] = weights_chunk.squeeze()
     extra_info_chunk[:, 0, 1] = dsid_chunk.squeeze()
+    extra_info_chunk[:, 0, 2] = eventNumber_chunk.squeeze()
     array_to_write=np.float32(np.concatenate(
         [
             y_chunk,
@@ -359,6 +363,7 @@ types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 
 # DATA_PATH='/data/atlas/HplusWh/20250218_Cats038910_NoDeltaRReq_TagInfo/'
 # DATA_PATH='/data/atlas/HplusWh/20250227_v4_tmpWithTrueInclusion/' # For background this is okay
 DATA_PATH='/data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/' # For signal must be this!
+DATA_PATH='/data/atlas/HplusWh/20250313_WithTrueInclusion_FixedOverlapWHsjet_SmallJetCloseToLargeJetRemovalDeltaR0.5/'
 MAX_CHUNK_SIZE = 100000
 # MAX_PER_DSID = {dsid : 10000000 for dsid in dsid_set}
 # MAX_PER_DSID[410470] = 100
@@ -369,8 +374,8 @@ for dsid in dsid_set:
     #     continue
     # if '510' in str(dsid):
     #     continue
-    if (dsid < 500000) or (dsid > 600000): # Is background
-    # if (dsid > 500000) and (dsid < 600000): # Is signal
+    # if (dsid < 500000) or (dsid > 600000): # Is background
+    if (dsid > 500000) and (dsid < 600000): # Is signal
         continue
 # for dsid in [510120]:
     # if ((500000<dsid) and (600000>dsid)) or (dsid==410470):
@@ -406,13 +411,14 @@ for dsid in dsid_set:
     mWH_qqbbs = []
     mWH_lvbbs = []
     mHs = []
+    eventNumbers = []
     current_chunk_size = 0
     total_events_written_for_sample = 0
     total_entries_written_for_sample = 0
     sum_abs_weights_written_for_sample = 0
     sum_weights_written_for_sample = 0
-    if (dsid > 500000) and (dsid<600000) and (DATA_PATH!='/data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/'):
-        assert(False)
+    # if (dsid > 500000) and (dsid<600000) and (DATA_PATH!='/data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/'):
+    #     assert(False)
     memmap_path = os.path.join(OUTPUT_DIR, f'dsid_{dsid}.memmap')
     if len(all_files) > 0: # Safeguard for when there aren't any files to loop through, so we don't create an empty memmap file
         with open(memmap_path, 'wb') as f:
@@ -421,7 +427,7 @@ for dsid in dsid_set:
         # print(path)
         # if path == '/data/atlas/HplusWh/20241128_ProcessedLightNtuples/user.rhulsken.mc16_13TeV.363355.She221_ZqqZvv.TOPQ1.e5525s3126r10201p4512.Nominal_v0_1l_out_root/user.rhulsken.31944615._000001.out.root':
         #     continue
-        x_chunk, y_chunk, dsid_chunk, weights_chunk, removals_chunk, mWh_qqbb_chunk, mWh_lvbb_chunk, mH_chunk = process_single_file(filepath=path, max_n_objs=max_n_objs, shuffle_objs=SHUFFLE_OBJECTS)
+        x_chunk, y_chunk, dsid_chunk, weights_chunk, removals_chunk, mWh_qqbb_chunk, mWh_lvbb_chunk, mH_chunk, eventNumber_chunk = process_single_file(filepath=path, max_n_objs=max_n_objs, shuffle_objs=SHUFFLE_OBJECTS)
         x_parts.append(x_chunk)
         ys.append(y_chunk)
         dsids.append(dsid_chunk)
@@ -429,12 +435,13 @@ for dsid in dsid_set:
         mWH_qqbbs.append(mWh_qqbb_chunk)
         mWH_lvbbs.append(mWh_lvbb_chunk)
         mHs.append(mH_chunk)
+        eventNumbers.append(eventNumber_chunk)
         # if x_chunk.shape[0]:
         #     assert(False)
         running_stats.update(x_chunk)
         current_chunk_size += x_chunk.shape[0]
         if (current_chunk_size > MAX_CHUNK_SIZE) or (file_n+1 == len(all_files)):
-            array_chunk = combine_arrays_for_writing(x_chunk=np.concatenate(x_parts, axis=0), y_chunk=np.concatenate(ys, axis=0), dsid_chunk=np.concatenate(dsids, axis=0), weights_chunk=np.concatenate(weights, axis=0), mWh_qqbbs_chunk=np.concatenate(mWH_qqbbs, axis=0), mWh_lvbbs_chunk=np.concatenate(mWH_lvbbs, axis=0), mH_chunk=np.concatenate(mHs, axis=0))
+            array_chunk = combine_arrays_for_writing(x_chunk=np.concatenate(x_parts, axis=0), y_chunk=np.concatenate(ys, axis=0), dsid_chunk=np.concatenate(dsids, axis=0), weights_chunk=np.concatenate(weights, axis=0), mWh_qqbbs_chunk=np.concatenate(mWH_qqbbs, axis=0), mWh_lvbbs_chunk=np.concatenate(mWH_lvbbs, axis=0), mH_chunk=np.concatenate(mHs, axis=0), eventNumber_chunk=np.concatenate(eventNumbers, axis=0))
             # assert(False)
             if array_chunk.shape[0] > 0: # Check there's actually something in there
                 # memmap = np.memmap(memmap_path, dtype=BIN_WRITE_TYPE, mode='r+', offset=total_entries_written_for_sample*array_chunk.itemsize, shape=array_chunk.shape)
@@ -455,6 +462,7 @@ for dsid in dsid_set:
             mWH_qqbbs = []
             mWH_lvbbs = []
             mHs = []
+            eventNumbers = []
         removals[0]+=removals_chunk[0]
         removals[1]+=removals_chunk[1]
         nfs+=1

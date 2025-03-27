@@ -55,7 +55,7 @@ else:
 
 # Some choices about the training process
 # Assumes that the data has already been binarised
-MODEL_ARCH="DEEPSETS_SELFATTENTION_RESIDUAL_X3"
+MODEL_ARCH="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP"
 ONLY_CORRECT_TRUTH_FOR_TRAINING = True
 ONLY_CORRECT_RECO_FOR_TRAINING = True
 REMOVE_WHERE_TRUTH_WOULD_BE_CUT=False # Should be false for classification train/test, and false for reco test
@@ -68,7 +68,7 @@ INCLUDE_ALL_SELECTIONS = True
 INCLUDE_NEGATIVE_SELECTIONS = True
 USE_OLD_TRUTH_SETTING = False
 
-PHI_ROTATED = True
+PHI_ROTATED = False
 USE_LORENTZ_INVARIANT_FEATURES = True
 TOSS_UNCERTAIN_TRUTH = True
 SHUFFLE_OBJECTS = True
@@ -116,10 +116,7 @@ if INCLUDE_INCLUSION_TAGS:
     N_Real_Vars_In_File += 2
     N_Real_Vars += 0
 
-# %%
 # Set up stuff to read in data from bin file
-
-
 batch_size = 256
 DATA_PATH=f'/data/atlas/baines/tmp2_SingleXbbSelected_XbbTagged_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired' + '_mHSel'*MH_SEL + '/'
 DATA_PATH=f'/data/atlas/baines/tmp_SingleXbbSelected_XbbTagged_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired' + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
@@ -128,7 +125,11 @@ DATA_PATH = '/data/atlas/baines/20250305v9' + '_NotPhiRotated'*(not PHI_ROTATED)
 DATA_PATH = '/data/atlas/baines/20250310v1_AppliedRecoNN' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + f'{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
 # DATA_PATH = '/data/atlas/baines/20250311v1' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + f'{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
 DATA_PATH = '/data/atlas/baines/20250311v1_AppliedRecoNNSplit' + '_RemovedWrongTruthForTraining'* ONLY_CORRECT_TRUTH_FOR_TRAINING + '_RemovedWrongRecoForTraining'*ONLY_CORRECT_RECO_FOR_TRAINING + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + f'{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
-target_channel = 'qqbb'
+DATA_PATH = '/data/atlas/baines/20250321v2_AppliedRecoNNSplit_WithEventNumbers_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5' + '_RemovedWrongTruthForTraining'* ONLY_CORRECT_TRUTH_FOR_TRAINING + '_RemovedWrongRecoForTraining'*ONLY_CORRECT_RECO_FOR_TRAINING + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + f'{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
+target_channel = 'lvbb'
+validation_split_idx=0
+n_splits=2
+# assert(validation_split_idx<n_splits)
 target_channel_num = {'lvbb':1, 'qqbb':2}[target_channel]
 if 'AppliedRecoNN' in DATA_PATH:
     N_Real_Vars_In_File += 1
@@ -142,6 +143,8 @@ else:
         stds[:4] = 1e5
     else:
         stds = None
+
+# %%
 memmap_paths_train = {}
 memmap_paths_val = {}
 for file_name in os.listdir(DATA_PATH):
@@ -153,12 +156,10 @@ for file_name in os.listdir(DATA_PATH):
     #     continue
     dsid = file_name[5:11]
     # if (int(dsid)!=510115) and (int(dsid)!=510116) and (int(dsid)!=510117):
-    if (int(dsid)<510122) or (int(dsid)>600000):
-    # if True:
+    # if (int(dsid)<510122) or (int(dsid)>600000):
+    if True:
         memmap_paths_train[int(dsid)] = DATA_PATH+file_name
     memmap_paths_val[int(dsid)] = DATA_PATH+file_name
-n_splits=2
-validation_split_idx=0
 train_dataloader = ProportionalMemoryMappedDataset(
                  memmap_paths = memmap_paths_train,  # DSID to memmap path
                  max_objs_in_memmap=max_n_objs_in_file,
@@ -176,6 +177,7 @@ train_dataloader = ProportionalMemoryMappedDataset(
                  means=means,
                  stds=stds,
                  objs_to_output=max_n_objs_to_read,
+                 has_eventNumbers=True,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
@@ -197,11 +199,16 @@ val_dataloader = ProportionalMemoryMappedDataset(
                  means=means,
                  stds=stds,
                  objs_to_output=max_n_objs_to_read,
+                 has_eventNumbers=True,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
 print(train_dataloader.get_total_samples())
+print(val_dataloader.get_total_samples())
 # assert(False) # Need to check if the weighting is correct - it seemed likely that the sum of training weights for signal was not the same as for background?
+
+# %%
+train_dataloader._reset_indices()
 
 # %%
 batch = next(train_dataloader)
@@ -333,6 +340,95 @@ if MODEL_ARCH=="HYBRID_SELFATTENTION_GATED":
             integrated_features = self.attention_integration(combined_features)
             
             return self.classifier(integrated_features)
+elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
+    class DeepSetsWithResidualSelfAttentionVariableTrueSkip(nn.Module):
+        def __init__(self, input_dim=5, num_classes=3, hidden_dim=256, num_heads=4, dropout_p=0.0, embedding_size=32, num_attention_blocks=3, include_mlp=True, hidden_dim_mlp=None):
+            super().__init__()
+            self.num_attention_blocks = num_attention_blocks
+            self.include_mlp = include_mlp
+            if hidden_dim_mlp is None:
+                hidden_dim_mlp = hidden_dim
+
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                self.invariant_features = LorentzInvariantFeatures()
+            
+            # Object type embedding
+            self.type_embedding = nn.Embedding(N_CTX, embedding_size)  # 5 object types
+            
+            # Initial per-object processing
+            self.object_net = nn.Sequential(
+                nn.Linear(input_dim + embedding_size, hidden_dim),  # All features except type + type embedding
+                nn.LayerNorm(hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim),
+            )
+            
+            # Create multiple attention blocks
+            self.attention_blocks = nn.ModuleList([
+                nn.ModuleDict({
+                    # 'layer_norm1': nn.LayerNorm(hidden_dim),
+                    'self_attention': nn.MultiheadAttention(
+                        embed_dim=hidden_dim,
+                        num_heads=num_heads,
+                        dropout=dropout_p/2,
+                        batch_first=True,
+                    ),
+                    'layer_norm2': nn.LayerNorm(hidden_dim),
+                    **({'post_attention': nn.Sequential(
+                        # nn.Linear(hidden_dim, hidden_dim_mlp),
+                        # nn.GELU(),
+                        # nn.Dropout(dropout_p),
+                        # nn.Linear(hidden_dim_mlp, hidden_dim),
+                        nn.Linear(hidden_dim, hidden_dim),
+                        nn.ReLU(),
+                        nn.Dropout(dropout_p),
+                    )} if self.include_mlp else {})
+                }) for _ in range(num_attention_blocks)
+            ])
+            # Final classification layers
+            self.classifier = nn.Sequential(
+                nn.Linear(hidden_dim, hidden_dim),
+                nn.ReLU(),
+                nn.Dropout(dropout_p),
+                nn.Linear(hidden_dim, hidden_dim // 2),
+                nn.ReLU(),
+                nn.Linear(hidden_dim // 2, num_classes)
+                # nn.Linear(hidden_dim, num_classes)
+            )
+    
+        def forward(self, object_features, object_types):
+            # Get type embeddings and combine with features
+            type_emb = self.type_embedding(object_types)
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                invariant_features = self.invariant_features(object_features[...,:4])
+            combined = torch.cat([invariant_features, object_features[...,4:], type_emb], dim=-1)
+            # Process each object
+            object_features = self.object_net(combined)
+            # Apply attention blocks
+            for block in self.attention_blocks:
+                # Store original features for residual connection
+                identity = object_features
+                # Apply self-attention
+                # normed_features = block['layer_norm1'](object_features)
+                attention_output, _ = block['self_attention'](
+                    object_features, object_features, object_features,
+                    key_padding_mask=(object_types==(N_CTX-1))
+                )
+                # Add residual connection and normalize
+                if self.include_mlp:
+                    residual = identity + attention_output
+                    # identity = residual
+                    normed_mlpin = block['layer_norm2'](residual)
+                    # Post-attention processing
+                    mlp_output = block['post_attention'](normed_mlpin)
+                    # object_features = identity + mlp_output
+                    object_features = mlp_output
+                else:
+                    object_features = identity + attention_output
+
+            # Pool by taking mean of non-padding to ensure permutation invariance
+            pooled = torch.sum(object_features, dim=1) / torch.sum(object_types!=(N_CTX-1), dim=-1).unsqueeze(-1)
+            return self.classifier(pooled)
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X3":
     class DeepSetsWithResidualSelfAttentionTriple(nn.Module):
         def __init__(self, input_dim=5, num_classes=3, hidden_dim=256, num_heads=4, dropout_p=0.0, embedding_size=32):
@@ -834,6 +930,7 @@ models = {}
 fit_histories = {}
 model_n = 0
 
+num_blocks_variable=3
 if MODEL_ARCH=="TRANSFORMER":
     # Create the model with the desired properties
     model_cfg = HookedTransformerConfig(
@@ -863,6 +960,8 @@ elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X2":
     model_cfg = {'d_model': 256, 'dropout_p': 0.0, "embedding_size":16, "num_heads":4}
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X3":
     model_cfg = {'d_model': 256, 'dropout_p': 0.2, "embedding_size":16, "num_heads":4}
+elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
+    model_cfg = {'include_mlp':True, 'd_model': 256, 'd_mlp': 256, 'num_blocks':num_blocks_variable, 'dropout_p': 0.15, "embedding_size":16, "num_heads":4}
 elif MODEL_ARCH=="HYBRID_SELFATTENTION_GATED":
     model_cfg = {'d_model': 256, 'dropout_p': 0.2, "embedding_size":32, "num_heads":1}
 else:
@@ -876,6 +975,8 @@ elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X2":
     models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionDouble(input_dim=N_Real_Vars, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads']).to(device)}
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X3":
     models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionTriple(input_dim=N_Real_Vars, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads']).to(device)}
+elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
+    models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionVariableTrueSkip(input_dim=N_Real_Vars, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION":
     models[model_n] = {'model' : DeepSetsWithSelfAttention(input_dim=N_Real_Vars, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads']).to(device)}
 elif MODEL_ARCH=="DEEPSETS":
@@ -969,7 +1070,7 @@ if 0:
 
 # %%
 model, train_loader, val_loader = models[model_n]['model'], train_dataloader, val_dataloader
-num_epochs = 20
+num_epochs = 30
 # log_interval = 100
 log_interval = int(50e3/batch_size)
 # longer_log_interval = log_interval*10
@@ -981,6 +1082,7 @@ name_mapping = {"DEEPSETS":"DS",
                 "DEEPSETS_SELFATTENTION_RESIDUAL":"DSSAR", 
                 "DEEPSETS_SELFATTENTION_RESIDUAL_X2":"DSSAR2", 
                 "DEEPSETS_SELFATTENTION_RESIDUAL_X3":"DSSAR3", 
+                "DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":f"DSSARVTS{num_blocks_variable}",
                 "PARTICLE_FLOW":"PF",
                 "TRANSFORMER":"TF",
                 }
@@ -1024,6 +1126,7 @@ global_step = 0
 total_train_samples_processed = 0
 train_loader._reset_indices()
 orig_len_train_dataloader=len(train_loader)
+orig_len_train_dataloader = int(orig_len_train_dataloader*0.75) # Only go through 0.6 of the data, since if we go all the way through, we'll just be running on background for the last few. There should be a better way of doing this, but I don't have it at present...
 num_lr_steps = num_epochs*orig_len_train_dataloader
 for epoch in range(num_epochs):
     # Update learning rate based on the cosine scheduler
@@ -1035,7 +1138,6 @@ for epoch in range(num_epochs):
     val_metrics_MCWts.reset()
     model.train()
     n_step = 0
-    orig_len_train_dataloader=len(train_loader)
     train_loss_epoch = 0
     sum_weights_epoch = 0
     for batch_idx in range(orig_len_train_dataloader):
@@ -1222,7 +1324,7 @@ for epoch in range(num_epochs):
                         wandb.log({"gradients/%s"%(name ): wandb.Histogram(param.detach().cpu().numpy())}, commit=False) # Log the gradients (values and edges) to WandB
     if ((epoch % SAVE_MODEL_EVERY) == (SAVE_MODEL_EVERY-1)):
         try:
-            modelSaveDir = "%s/models/%d/"%(saveDir, model_n)
+            modelSaveDir = "%s/models/%s_Nplits%d_ValIdx%d/"%(saveDir, target_channel, n_splits, validation_split_idx)
             os.makedirs(modelSaveDir, exist_ok=True)
             torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d_%d" %(epoch, global_step) + '.pth')
         except:
@@ -1230,7 +1332,7 @@ for epoch in range(num_epochs):
 # wandb.finish()
 
 # %%
-modelSaveDir = "%s/models/%d/"%(saveDir, model_n)
+modelSaveDir = "%s/models/%s_Nplits%d_ValIdx%d/"%(saveDir, target_channel, n_splits, validation_split_idx)
 os.makedirs(modelSaveDir, exist_ok=True)
 torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d" %(global_step) + '.pth')
 # %%

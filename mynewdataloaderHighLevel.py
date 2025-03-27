@@ -25,6 +25,7 @@ class ProportionalMemoryMappedDatasetHighLevel:
                  signal_reweights: typing.Optional[np.array]=None,
                  means=None,
                  stds=None,
+                 has_eventNumbers=False,
                  ):
         """
         Initialize a dataset loader with memory-mapped files for each class (DSID)
@@ -43,6 +44,7 @@ class ProportionalMemoryMappedDatasetHighLevel:
         self.n_targets = n_targets
         self.signal_reweights = signal_reweights
         self.shuffle_batch = shuffle_batch
+        self.has_eventNumbers = has_eventNumbers
 
         # Add train/val splitting logic
         self.is_train = is_train
@@ -85,7 +87,7 @@ class ProportionalMemoryMappedDatasetHighLevel:
                     path, 
                     dtype=np.float32,  # adjust dtype as needed
                     mode='r+', 
-                    shape=(total_samples, N_Real_Vars+5)  # adjust shape as per your data
+                    shape=(total_samples, N_Real_Vars+6)  # adjust shape as per your data
                 )
                 self.abs_weight_sums[dsid] = sum_abs_weights
                 self.weight_sums[dsid] = sum_weights
@@ -127,10 +129,18 @@ class ProportionalMemoryMappedDatasetHighLevel:
         self.current_indices = {}
         for dsid in self.memmaps.keys():
             # Randomly shuffle indices for each class
-            if self.is_train:
-                self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.arange(self.sample_counts[dsid]) % self.n_splits) != self.validation_split_idx]
+            if self.has_eventNumbers:
+                if self.is_train:
+                    # self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[~(np.isin((self.memmaps[dsid][:,1,2] % self.n_splits), self.validation_split_idx))]
+                    self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(self.memmaps[dsid][:,5] % self.n_splits) != self.validation_split_idx]
+                else:
+                    # self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.isin((self.memmaps[dsid][:,1,2] % self.n_splits), self.validation_split_idx))]
+                    self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(self.memmaps[dsid][:,5] % self.n_splits) == self.validation_split_idx]
             else:
-                self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.arange(self.sample_counts[dsid]) % self.n_splits) == self.validation_split_idx]
+                if self.is_train:
+                    self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.arange(self.sample_counts[dsid]) % self.n_splits) != self.validation_split_idx]
+                else:
+                    self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.arange(self.sample_counts[dsid]) % self.n_splits) == self.validation_split_idx]
             if self.shuffle_batch:
                 random.shuffle(self.current_indices[dsid])
         self.total_samples = sum([len(self.current_indices[dsid]) for dsid in self.current_indices.keys()])
@@ -248,7 +258,10 @@ class ProportionalMemoryMappedDatasetHighLevel:
         mWh = torch.from_numpy(batch_samples[:,2])
         dsid = torch.from_numpy(batch_samples[:,3])
         mH = torch.from_numpy(batch_samples[:,4])
-        x = torch.from_numpy(batch_samples[:,5:])
+        if self.has_eventNumbers:
+            x = torch.from_numpy(batch_samples[:,6:]) # The index at 5 is the event number for train/val split
+        else:
+            x = torch.from_numpy(batch_samples[:,5:])
         x = (x - self.means)/self.stds
         MC_Wts = torch.from_numpy(MC_Wts).reshape(training_Wts.shape)
         # print(training_Wts)

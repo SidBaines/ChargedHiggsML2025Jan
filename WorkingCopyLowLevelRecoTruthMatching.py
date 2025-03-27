@@ -86,6 +86,7 @@ REQUIRE_XBB = False # If we only select categories 0, 3, 8, 9, 10 (ie, if INCLUD
 assert (~((REQUIRE_XBB and (~IS_XBB_TAGGED))))
 INCLUDE_TAG_INFO = True
 INCLUDE_ALL_SELECTIONS = True
+INCLUDE_NEGATIVE_SELECTIONS = True
 MET_CUT_ON = True
 MH_SEL = False
 N_TARGETS = 3 # Number of target classes (needed for one-hot encoding)
@@ -120,6 +121,7 @@ DATA_PATH=f'/data/atlas/baines/tmp6_LowLevelRecoTruthMatching' + '_NotPhiRotated
 DATA_PATH=f'/data/atlas/baines/tmp7_LowLevelRecoTruthMatching' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + f'_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT + '/'
 DATA_PATH=f'/data/atlas/baines/20250313v1_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5_LowLevelRecoTruthMatching' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + f'_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT + '/'
 DATA_PATH=f'/data/atlas/baines/20250314v1_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5_LowLevelRecoTruthMatching' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + f'_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT + '/'
+DATA_PATH=f'/data/atlas/baines/20250321v1_WithEventNumbers_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + f'_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT + '/'
 
 if NORMALISE_DATA:
     means = np.load(f'{DATA_PATH}mean.npy')[1:]
@@ -167,6 +169,7 @@ train_dataloader = ProportionalMemoryMappedDataset(
                  stds=stds,
                  objs_to_output=max_n_objs_to_read,
                  signal_only=True,
+                 has_eventNumbers=True,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
@@ -177,7 +180,8 @@ val_dataloader = ProportionalMemoryMappedDataset(
                  N_Real_Vars_To_Return=N_Real_Vars,
                  class_proportions = None,
                 #  batch_size=64*8*64*8,
-                 batch_size=64*8*64,
+                #  batch_size=64*8*64,
+                 batch_size=batch_size,
                  device=device,
                  is_train=False,
                  validation_split_idx=validation_split_idx,
@@ -188,10 +192,12 @@ val_dataloader = ProportionalMemoryMappedDataset(
                  stds=stds,
                  objs_to_output=max_n_objs_to_read,
                  signal_only=True,
+                 has_eventNumbers=True,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
 print(train_dataloader.get_total_samples())
+print(val_dataloader.get_total_samples())
 # assert(False) # Need to check if the weighting is correct - it seemed likely that the sum of training weights for signal was not the same as for background?
 # %%
 batch = next(train_dataloader)
@@ -456,9 +462,12 @@ elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE":
             return self.classifier(object_features)
 elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
     class DeepSetsWithResidualSelfAttentionVariableTrueSkip(nn.Module):
-        def __init__(self, input_dim=5, num_classes=3, hidden_dim=256, num_heads=4, dropout_p=0.0, embedding_size=32, num_attention_blocks=3):
+        def __init__(self, input_dim=5, num_classes=3, hidden_dim=256, num_heads=4, dropout_p=0.0, embedding_size=32, num_attention_blocks=3, include_mlp=True, hidden_dim_mlp=None):
             super().__init__()
             self.num_attention_blocks = num_attention_blocks
+            self.include_mlp = include_mlp
+            if hidden_dim_mlp is None:
+                hidden_dim_mlp = hidden_dim
 
             if USE_LORENTZ_INVARIANT_FEATURES:
                 self.invariant_features = LorentzInvariantFeatures()
@@ -471,7 +480,7 @@ elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
                 nn.Linear(input_dim + embedding_size, hidden_dim),  # All features except type + type embedding
                 nn.LayerNorm(hidden_dim),
                 nn.ReLU(),
-                nn.Linear(hidden_dim, hidden_dim)
+                nn.Linear(hidden_dim, hidden_dim),
             )
             
             # Create multiple attention blocks
@@ -485,11 +494,12 @@ elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
                         batch_first=True,
                     ),
                     # 'layer_norm2': nn.LayerNorm(hidden_dim),
-                    'post_attention': nn.Sequential(
-                        nn.Linear(hidden_dim, hidden_dim),
-                        nn.ReLU(),
+                    **({'post_attention': nn.Sequential(
+                        nn.Linear(hidden_dim, hidden_dim_mlp),
+                        nn.GELU(),
                         nn.Dropout(dropout_p),
-                    )
+                        nn.Linear(hidden_dim_mlp, hidden_dim),
+                    )} if self.include_mlp else {})
                 }) for _ in range(num_attention_blocks)
             ])
             # Final classification layers
@@ -508,6 +518,8 @@ elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
             type_emb = self.type_embedding(object_types)
             if USE_LORENTZ_INVARIANT_FEATURES:
                 invariant_features = self.invariant_features(object_features[...,:4])
+            else:
+                invariant_features = object_features[...,:4]
             combined = torch.cat([invariant_features, object_features[...,4:], type_emb], dim=-1)
             # Process each object
             object_features = self.object_net(combined)
@@ -522,12 +534,15 @@ elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
                     key_padding_mask=(object_types==(N_CTX-1))
                 )
                 # Add residual connection and normalize
-                residual = identity + attention_output
-                identity = residual
-                # normed_mlpin = block['layer_norm2'](residual)
-                # Post-attention processing
-                mlp_output = block['post_attention'](residual)
-                object_features = identity + mlp_output
+                if self.include_mlp:
+                    residual = identity + attention_output
+                    identity = residual
+                    # normed_mlpin = block['layer_norm2'](residual)
+                    # Post-attention processing
+                    mlp_output = block['post_attention'](residual)
+                    object_features = identity + mlp_output
+                else:
+                    object_features = identity + attention_output
             return self.classifier(object_features)
 elif MODEL_ARCH=="DEEPSETS_RESIDUAL_LONGCLASSIFIER":
     class DeepSetsWithResidualSelfAttentionVariableLongclassifier(nn.Module):
@@ -1187,7 +1202,7 @@ models = {}
 fit_histories = {}
 model_n = 0
 
-num_blocks_variable=5
+num_blocks_variable=3
 num_clasifierlayers_variable=8
 if MODEL_ARCH=="TRANSFORMER":
     # Create the model with the desired properties
@@ -1219,7 +1234,7 @@ elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X2":
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X3":
     model_cfg = {'d_model': 300, 'dropout_p': 0.2, "embedding_size":10, "num_heads":4}
 elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
-    model_cfg = {'d_model': 152, 'num_blocks':num_blocks_variable, 'dropout_p': 0.1, "embedding_size":10, "num_heads":2}
+    model_cfg = {'include_mlp':True, 'd_model': 152, 'd_mlp': 256, 'num_blocks':num_blocks_variable, 'dropout_p': 0.0, "embedding_size":10, "num_heads":4}
 elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE":
     model_cfg = {'d_model': 152, 'num_blocks':num_blocks_variable, 'dropout_p': 0.1, "embedding_size":10, "num_heads":2}
 elif MODEL_ARCH=="DEEPSETS_RESIDUAL_LONGCLASSIFIER":
@@ -1245,7 +1260,7 @@ elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL":
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X3":
     models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionTriple(num_classes=num_classes, input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
 elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
-    models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionVariableTrueSkip(num_attention_blocks=model_cfg['num_blocks'], input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
+    models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionVariableTrueSkip(hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
 elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE":
     models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionVariable(num_attention_blocks=model_cfg['num_blocks'], input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
 elif MODEL_ARCH=="DEEPSETS_RESIDUAL_LONGCLASSIFIER":
@@ -1606,7 +1621,7 @@ for epoch in range(num_epochs):
                         wandb.log({"gradients/%s"%(name ): wandb.Histogram(param.detach().cpu().numpy())}, commit=False) # Log the gradients (values and edges) to WandB
     if ((epoch % SAVE_MODEL_EVERY) == (SAVE_MODEL_EVERY-1)):
         try:
-            modelSaveDir = "%s/models/%d/"%(saveDir, model_n)
+            modelSaveDir = "%s/models/Nplits%d_ValIdx%d/"%(saveDir, n_splits, validation_split_idx)
             os.makedirs(modelSaveDir, exist_ok=True)
             torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d_%d" %(epoch, global_step) + '.pth')
         except:
@@ -1614,7 +1629,7 @@ for epoch in range(num_epochs):
 # wandb.finish()
 
 # %%
-modelSaveDir = "%s/models/%d/"%(saveDir, model_n)
+modelSaveDir = "%s/models/Nplits%d_ValIdx%d/"%(saveDir, n_splits, validation_split_idx)
 os.makedirs(modelSaveDir, exist_ok=True)
 torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d" %(global_step) + '.pth')
 

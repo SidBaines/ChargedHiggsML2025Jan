@@ -4,8 +4,10 @@ import matplotlib.pyplot as plt
 import math
 from typing import List
 import matplotlib as mpl
+import einops
 
 # %%
+    
 
 def check_valid(types, inclusion, padding_token, categorical, returnTypes = False):
     if categorical:
@@ -41,6 +43,33 @@ def check_valid(types, inclusion, padding_token, categorical, returnTypes = Fals
         if returnTypes:
             return valid, valid_lvbb.to(int) + valid_qqbb.to(int)*2
     return valid
+
+
+def check_category(types, #[batch object]
+                   inclusion, # [batch object]
+                   padding_token # int
+                   ):
+    num_in_H = {}
+    num_in_W = {}
+    assert(padding_token==5) # Only written this code for this; if ljets are split into 3=not-xbb, 5=xbb, then have to re-write this function
+    particle_type_mapping = {0:'electron', 1:'muon', 2:'neutrino', 3:'ljet', 4:'sjet'}
+    category = np.ones(len(types), dtype=int)*-1
+    for ptype_idx in particle_type_mapping.keys():
+        num_in_H[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).astype(int) * (inclusion==1).astype(int))).sum(axis=-1)
+        num_in_W[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).astype(int) * (inclusion>1).astype(int))).sum(axis=-1)
+    valid_H_sjet =   ((num_in_H['electron']==0) & (num_in_H['muon']==0) & (num_in_H['neutrino']==0) & (num_in_H['sjet']==2) & (num_in_H['ljet']==0))
+    valid_H_ljet =   ((num_in_H['electron']==0) & (num_in_H['muon']==0) & (num_in_H['neutrino']==0) & (num_in_H['sjet']==0) & (num_in_H['ljet']==1)) 
+    valid_W_lv = ((num_in_W['electron']==1) & (num_in_W['muon']==0) & (num_in_W['neutrino']==1) & (num_in_W['sjet']==0) & (num_in_W['ljet']==0)) | \
+                ((num_in_W['electron']==0) & (num_in_W['muon']==1) & (num_in_W['neutrino']==1) & (num_in_W['sjet']==0) & (num_in_W['ljet']==0)) 
+    valid_W_sjet = ((num_in_W['electron']==0) & (num_in_W['muon']==0) & (num_in_W['neutrino']==0) & (num_in_W['sjet']==2) & (num_in_W['ljet']==0))
+    valid_W_ljet = ((num_in_W['electron']==0) & (num_in_W['muon']==0) & (num_in_W['neutrino']==0) & (num_in_W['sjet']==0) & (num_in_W['ljet']==1))
+    category[valid_H_sjet & valid_W_sjet]   = 0
+    category[valid_H_sjet & valid_W_lv]     = 1
+    category[valid_H_sjet & valid_W_ljet]   = 2
+    category[valid_H_ljet & valid_W_sjet]   = 3
+    category[valid_H_ljet & valid_W_lv]     = 4
+    category[valid_H_ljet & valid_W_ljet]   = 5
+    return category
 
 
 
@@ -217,6 +246,50 @@ def Get_PtEtaPhiM_fromXYZT(obj_px, obj_py, obj_pz, obj_e, use_torch=False):
         obj_M[obj_Mag2>=0] = np.sqrt((obj_Mag2[obj_Mag2>=0]))
 
         return obj_pt, obj_Eta, obj_Phi, obj_M
+
+
+def get_num_btags(x_part, types, pred_inclusion, tag_info_idx, use_torch=False): # Put it down here because it needs the Get_PtEtaPhiM_fromXYZT function
+    # Function to get the number of b-tagged small-R jets (sjets) passing a given working point
+    # x_part: (n_batch, n_obj, n_features) tensor of particle features
+    # types: (n_batch, n_obj) tensor of particle types. 0=electron, 1=muon, 2=neutrino, 3=ljet, 4=sjet
+    # pred_inclusion: (n_batch, n_obj) tensor of predicted inclusions. 0=not included, 1=Higgs, 2=W
+    # Returns: (n_batch,) tensor of the number of b-tagged sjets in each event
+    if use_torch:
+        is_sjet = types == 4 # Shape: (n_batch, n_obj)
+        THESHOLD = 0.645925
+        SMALL_JET_DELTA_R_THRESHOLD = 1.4
+        is_btagged = x_part[..., tag_info_idx] > THESHOLD # Shape: (n_batch, n_obj)
+        is_btagged_sjet = is_sjet & is_btagged # Shape: (n_batch, n_obj)
+        _, Eta_query, Phi_query, _ =  Get_PtEtaPhiM_fromXYZT(x_part[..., 0], x_part[..., 1], x_part[..., 2], x_part[..., 3], use_torch=use_torch) # Each has shape: (n_batch, n_obj)
+        _, Eta_key, Phi_key, _ =  Get_PtEtaPhiM_fromXYZT(x_part[..., 0], x_part[..., 1], x_part[..., 2], x_part[..., 3], use_torch=use_torch) #  Each has shape: (n_batch, n_obj)
+        delta_R = torch.sqrt((Eta_query.unsqueeze(-2) - Eta_key.unsqueeze(-1))**2 + (Phi_query.unsqueeze(-2) - Phi_key.unsqueeze(-1))**2) # Shape: (n_batch, n_obj, n_obj)
+        large_R_W = (pred_inclusion == 2) & (types == 3) # Shape: (n_batch, n_obj)
+        large_R_H = (pred_inclusion == 1) & (types == 3) # Shape: (n_batch, n_obj)
+        # Fill the delta R where NOT large-R W or large-R Higgs with values greater than the small jet delta R threshold
+        delta_R[~einops.repeat((large_R_W | large_R_H), 'batch object_key -> batch object_query object_key', object_query=delta_R.shape[1])] = SMALL_JET_DELTA_R_THRESHOLD + 1 # Shape: (n_batch, n_obj, n_obj)
+        passes_delta_R = torch.all(delta_R > SMALL_JET_DELTA_R_THRESHOLD, dim=-1) # Shape: (n_batch, n_obj)
+        small_jet_passing = passes_delta_R & is_btagged_sjet # Shape: (n_batch, n_obj)
+        return torch.sum(small_jet_passing, dim=-1) # Shape: (n_batch,)
+    else:
+        is_sjet = types == 4 # Shape: (n_batch, n_obj)
+        THESHOLD = 0.645925
+        SMALL_JET_DELTA_R_THRESHOLD = 1.4
+        is_btagged = x_part[..., tag_info_idx] > THESHOLD # Shape: (n_batch, n_obj)
+        is_btagged_sjet = is_sjet & is_btagged # Shape: (n_batch, n_obj)
+        _, Eta_query, Phi_query, _ =  Get_PtEtaPhiM_fromXYZT(x_part[..., 0], x_part[..., 1], x_part[..., 2], x_part[..., 3], use_torch=use_torch) # Each has shape: (n_batch, n_obj)
+        _, Eta_key, Phi_key, _ =  Get_PtEtaPhiM_fromXYZT(x_part[..., 0], x_part[..., 1], x_part[..., 2], x_part[..., 3], use_torch=use_torch) #  Each has shape: (n_batch, n_obj)
+        dEta = np.expand_dims(Eta_query, -2) - np.expand_dims(Eta_key, -1) # Shape: (n_batch, n_obj_Q, n_obj_K)
+        dPhi = np.expand_dims(Phi_query, -2) - np.expand_dims(Phi_key,-1) # Shape:  (n_batch, n_obj_Q, n_obj_K)
+        dPhi = np.arctan2(np.sin(dPhi), np.cos(dPhi)) # Shape:  (n_batch, n_obj_Q, n_obj_K)
+        delta_R = np.sqrt((dEta)**2 + (dPhi)**2) # Shape:  (n_batch, n_obj_Q, n_obj_K)
+        large_R_W = (pred_inclusion == 2) & (types == 3) # Shape: (n_batch, n_obj)
+        large_R_H = (pred_inclusion == 1) & (types == 3) # Shape: (n_batch, n_obj)
+        # Fill the delta R where NOT large-R W or large-R Higgs with values greater than the small jet delta R threshold
+        delta_R[~einops.repeat((large_R_W | large_R_H), 'batch object_key -> batch object_query object_key', object_query=delta_R.shape[1])] = SMALL_JET_DELTA_R_THRESHOLD + 1 # Shape: (n_batch, n_obj_Q, n_obj_K)
+        passes_delta_R = np.all(delta_R > SMALL_JET_DELTA_R_THRESHOLD, axis=-1) # Shape: (n_batch, n_obj)
+        small_jet_passing = passes_delta_R & is_btagged_sjet # Shape: (n_batch, n_obj)
+        return np.sum(small_jet_passing, axis=-1) # Shape: (n_batch,)
+
 
 # %% Temporary testing cell
 def GetXYZT_FromPtEtaPhiM(pt, eta, phi, m):

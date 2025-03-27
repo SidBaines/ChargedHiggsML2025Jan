@@ -5,6 +5,9 @@ ts.append(time.time())
 
 import numpy as np
 import os
+os.environ['OPENBLAS_NUM_THREADS'] = '16'
+os.environ['MKL_NUM_THREADS'] = '16'
+os.environ['OMP_NUM_THREADS'] = '16'
 import torch
 from datetime import datetime
 from jaxtyping import Float
@@ -68,11 +71,17 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # %%
 # Set up stuff to read in data from bin file
 
-batch_size = 64*8
-DATA_PATH = '/data/atlas/baines/tmp3_highLevel' + '_MetCut'*MET_CUT_ON + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
+batch_size = 64*4
+DATA_PATH = '/data/atlas/baines/20250322v4_highLevel' + '_MetCut'*MET_CUT_ON + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
 memmap_paths_train = {}
 memmap_paths_val = {}
-channel = 'qqbb'
+channel = 'lvbb'
+n_splits=2
+validation_split_idx=0
+KEEP_DSID= None # a dsid if we only want to keep that DSID in training, or None
+MIN_DSID = None # a dsid if we only want to keep this DSID or above (inclusive) or None
+MAX_DSID = None # a dsid if we only want to keep this DSID or below (inclusive) or None
+assert(sum([i is not None for i in [KEEP_DSID, MIN_DSID, MAX_DSID]])<=1)
 means = np.load(f'{DATA_PATH}{channel}_mean.npy')
 stds = np.load(f'{DATA_PATH}{channel}_std.npy')
 for file_name in os.listdir(DATA_PATH):
@@ -84,15 +93,22 @@ for file_name in os.listdir(DATA_PATH):
         dsid = file_name[5:11]
         memmap_paths_val[int(dsid)] = DATA_PATH+file_name
         # if (int(dsid) > 510116) or (int(dsid) < 500000) or (int(dsid) > 600000):
-        if True:
+        if KEEP_DSID is not None:
+            if (int(dsid)==KEEP_DSID) or (int(dsid) < 500000) or (int(dsid) > 600000):
+                memmap_paths_train[int(dsid)] = DATA_PATH+file_name
+        elif MIN_DSID is not None: # Train with only certain DSID or above
+            if (int(dsid)>=MIN_DSID) or (int(dsid) < 500000) or (int(dsid) > 600000):
+                memmap_paths_train[int(dsid)] = DATA_PATH+file_name
+        elif MAX_DSID is not None: # Train with only certain DSID or below
+            if (int(dsid)<=MAX_DSID) or (int(dsid) < 500000) or (int(dsid) > 600000):
+                memmap_paths_train[int(dsid)] = DATA_PATH+file_name
+        else: # train with all
             memmap_paths_train[int(dsid)] = DATA_PATH+file_name
     else:
         pass
-n_splits=2
-validation_split_idx=0
 train_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  memmap_paths = memmap_paths_train,  # DSID to memmap path
-                 N_Real_Vars=N_Real_Vars, # Will auto add 4 (for the y, w, dsid, mWh) inside the funciton
+                 N_Real_Vars=N_Real_Vars, # Will auto add 6 (for the y, w, dsid, mWh, mH, eventNumbers) inside the funciton
                  class_proportions = None,
                  batch_size=batch_size,
                  device=device, 
@@ -102,7 +118,8 @@ train_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  n_targets=N_TARGETS,
                  means=means,
                  stds=stds,
-                #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
+                 has_eventNumbers=True,
+                #  signal_reweights=np.array([3,3,3,1,1,1,1,1,1,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
 val_dataloader = ProportionalMemoryMappedDatasetHighLevel(
@@ -117,6 +134,7 @@ val_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  n_targets=N_TARGETS,
                  means=means,
                  stds=stds,
+                 has_eventNumbers=True,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
@@ -191,8 +209,8 @@ models[model_n] = {
     'model':ConfigurableNN(
         N_inputs=N_Real_Vars, 
         N_targets=N_TARGETS, 
-        hidden_layers=[200, 200, 200], 
-        dropout_prob=0.1, 
+        hidden_layers=[400,400,400,400,400],
+        dropout_prob=0.1,
         use_batchnorm=False
         ).to(device)
     }
@@ -207,7 +225,7 @@ from utils import basic_lr_scheduler
 
 
 # SHOULD CHANGE WEIGHT DECAY BACK (IT WAS 1e-5 before)
-num_epochs = 300
+num_epochs = 50
 
 # %%
 model, train_loader, val_loader = models[model_n]['model'], train_dataloader, val_dataloader
@@ -215,8 +233,8 @@ log_interval = 50
 longer_log_interval = 1000000000
 SAVE_MODEL_EVERY = int(num_epochs/3)
 config = {
-        "learning_rate_high": 1e-5,
-        "learning_rate_low": 1e-7,
+        "learning_rate_high": 5e-5,
+        "learning_rate_low": 2e-7,
         # "learning_rates": [1e-4, 1e-5, 1e-6],
         "cosine_lr_n_epochs": num_epochs,   # Number of epochs to complete one cycle of learning rate
         "architecture": "HighLevelNN",
@@ -225,19 +243,19 @@ config = {
         "batch_size": batch_size,
         "wandb":True,
         # "wandb":False,
-        "name":"_"+timeStr+"_HighLevel"+channel,
-        "weight_decay":1e-4,
+        "name":"_"+timeStr+"_HighLevel"+channel+f"_Only{str(KEEP_DSID)}"*(KEEP_DSID is not None)+f"_Min{str(MIN_DSID)}"*(MIN_DSID is not None)+f"_Max{str(MAX_DSID)}"*(MAX_DSID is not None),
+        "weight_decay":2e-5,
     }
 optimizer = torch.optim.Adam(models[model_n]['model'].parameters(), lr=1e-4, weight_decay=config["weight_decay"])
 if config['wandb']:
     init_wandb(config)
     # wandb.watch(model, log_freq=100)
 
-criterion = HEPLoss(apply_correlation_penalty=True, alpha=1.0)
-train_metrics = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
-val_metrics = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=val_dataloader.abs_weight_sums, signal_acceptance_levels=[1000, 5000])
-train_metrics_MCWts = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
-val_metrics_MCWts = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=val_dataloader.weight_sums, signal_acceptance_levels=[1000, 5000])
+criterion = HEPLoss(apply_correlation_penalty=False, alpha=1.0)
+train_metrics = HEPMetrics(max_bkg_levels=[200], max_buffer_len=int(train_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[1000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
+val_metrics = HEPMetrics(max_bkg_levels=[200], max_buffer_len=int(val_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=val_dataloader.abs_weight_sums, signal_acceptance_levels=[1000])
+train_metrics_MCWts = HEPMetrics(max_bkg_levels=[200], max_buffer_len=int(train_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[1000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
+val_metrics_MCWts = HEPMetrics(max_bkg_levels=[200], max_buffer_len=int(val_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=val_dataloader.weight_sums, signal_acceptance_levels=[1000])
 global_step = 0
 total_train_samples_processed = 0
 
@@ -410,15 +428,20 @@ for epoch in range(num_epochs):
                         wandb.log({"gradients/%s"%(name ): wandb.Histogram(param.detach().cpu().numpy())}, commit=False) # Log the gradients (values and edges) to WandB
     if ((epoch % SAVE_MODEL_EVERY) == (SAVE_MODEL_EVERY-1)):
         try:
-            modelSaveDir = "%s/models/%d/"%(saveDir, model_n)
+            modelSaveDir = "%s/models/%s_Nplits%d_ValIdx%d/"%(saveDir, channel, n_splits, validation_split_idx)
             os.makedirs(modelSaveDir, exist_ok=True)
-            torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d_%d" %(epoch, global_step) + '.pth')
+            torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d" %(global_step) + '.pth')
+            shutil.copy(f'{DATA_PATH}{channel}_std.npy', modelSaveDir + "/std.npy")
+            shutil.copy(f'{DATA_PATH}{channel}_mean.npy', modelSaveDir + "/mean.npy")
         except:
             pass
 wandb.finish()
 
 # %%
-modelSaveDir = "%s/models/%d/"%(saveDir, model_n)
+
+modelSaveDir = "%s/models/%s_Nplits%d_ValIdx%d/"%(saveDir, channel, n_splits, validation_split_idx)
 os.makedirs(modelSaveDir, exist_ok=True)
-torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d_%d" %(epoch, global_step) + '.pth')
+torch.save(models[model_n]["model"].state_dict(), modelSaveDir + "/chkpt%d" %(global_step) + '.pth')
+shutil.copy(f'{DATA_PATH}{channel}_std.npy', modelSaveDir + "/std.npy")
+shutil.copy(f'{DATA_PATH}{channel}_mean.npy', modelSaveDir + "/mean.npy")
 # %%

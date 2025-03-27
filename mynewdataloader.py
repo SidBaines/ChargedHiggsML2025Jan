@@ -63,6 +63,7 @@ class ProportionalMemoryMappedDataset:
                  stds=None,
                  objs_to_output=14,
                  signal_only=False, # Flag which is used for when we are only including signals, so that we don't multiply all weights by 0 in an effort to balance
+                 has_eventNumbers=False,
                  ):
         """
         Initialize a dataset loader with memory-mapped files for each class (DSID)
@@ -85,6 +86,7 @@ class ProportionalMemoryMappedDataset:
         self.signal_reweights = signal_reweights
         self.objs_to_output = objs_to_output
         self.N_Real_Vars_To_Return = N_Real_Vars_To_Return
+        self.has_eventNumbers = has_eventNumbers
 
         # Add train/val splitting logic
         self.is_train = is_train
@@ -171,10 +173,21 @@ class ProportionalMemoryMappedDataset:
         self.current_indices = {}
         for dsid in self.memmaps.keys():
             # Randomly shuffle indices for each class
-            if self.is_train:
-                self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.arange(self.sample_counts[dsid]) % self.n_splits) != self.validation_split_idx]
+            if self.has_eventNumbers:
+                # NOTE This isn't done any more: Updating this to take list of indices, so that we can eg. have the splits be [0,2] for validation and [1,3] for training. This fixes the fact that, after reconstruction, we might not have even splits of background across both splits 0/1
+                # if isinstance(self.validation_split_idx, int):
+                    # self.validation_split_idx = [self.validation_split_idx]
+                if self.is_train:
+                    # self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[~(np.isin((self.memmaps[dsid][:,1,2] % self.n_splits), self.validation_split_idx))]
+                    self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(self.memmaps[dsid][:,1,2] % self.n_splits) != self.validation_split_idx]
+                else:
+                    # self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.isin((self.memmaps[dsid][:,1,2] % self.n_splits), self.validation_split_idx))]
+                    self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(self.memmaps[dsid][:,1,2] % self.n_splits) == self.validation_split_idx]
             else:
-                self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.arange(self.sample_counts[dsid]) % self.n_splits) == self.validation_split_idx]
+                if self.is_train:
+                    self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.arange(self.sample_counts[dsid]) % self.n_splits) != self.validation_split_idx]
+                else:
+                    self.current_indices[dsid] = np.arange(self.sample_counts[dsid])[(np.arange(self.sample_counts[dsid]) % self.n_splits) == self.validation_split_idx]
             if self.shuffle_batch:
                 random.shuffle(self.current_indices[dsid])
         self.total_samples = sum([len(self.current_indices[dsid]) for dsid in self.current_indices.keys()])

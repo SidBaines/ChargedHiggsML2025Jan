@@ -32,7 +32,7 @@ MET_CUT_ON = True
 MH_SEL = False
 REQUIRE_XBB = True
 BIN_WRITE_TYPE=np.float32
-OUTPUT_DIR = '/data/atlas/baines/tmp3_highLevel' + '_MetCut'*MET_CUT_ON + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
+OUTPUT_DIR = '/data/atlas/baines/20250322v4_highLevel' + '_MetCut'*MET_CUT_ON + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 types_set = np.array([-2, 1, 2])  # Try not to change this often - have to re-binarise if we do!
 
@@ -117,13 +117,14 @@ def process_single_file(filepath, target_channel):
     _, x_event, y = read_file(filepath, 
                                 particle_features=[],
                                 event_level_features=event_level_features,
-                                labels=['DSID', truth_var],
+                                labels=['DSID', truth_var, 'eventNumber'],
                                 new_inputs_labels=True
     )
     if len(y):
         dsid = y[0,0]
     else:
         dsid = 0 # Let the function run with empty arrays anyway
+    eventNumber = y[:,2]
     if 0:
         selection_category = x_event[:,1]
         if target_channel == 'lvbb':
@@ -162,14 +163,22 @@ def process_single_file(filepath, target_channel):
     mWH = x_event[combined_sel,4]
     x = x_event[combined_sel,5:]
     dsids = y[combined_sel,0]
+    eventNumber = eventNumber[combined_sel]
     # truth_labels = np.searchsorted(types_set, y[combined_sel, 1])
     truth_labels = (y[combined_sel, 1] == 1)*1 + (y[combined_sel, 1] == 2)*2
 
-    return x, truth_labels, wts, dsids, mWH, mH, removals
+    return x, truth_labels, wts, dsids, mWH, mH, removals, eventNumber
 
-def combine_arrays_for_writing(x_chunk, y_chunk, weights_chunk, mWh_chunk, dsids_chunk, mHs_chunk):
+def combine_arrays_for_writing(x_chunk, y_chunk, weights_chunk, mWh_chunk, dsids_chunk, mHs_chunk, eventNumber_chunk):
     array_to_write=np.float32(np.concatenate(
-        [y_chunk.reshape(-1,1), weights_chunk.reshape(-1,1), mWh_chunk.reshape(-1,1), dsids_chunk.reshape(-1,1), mHs_chunk.reshape(-1,1), x_chunk],
+        [y_chunk.reshape(-1,1), 
+         weights_chunk.reshape(-1,1), 
+         mWh_chunk.reshape(-1,1), 
+         dsids_chunk.reshape(-1,1), 
+         mHs_chunk.reshape(-1,1), 
+         (eventNumber_chunk%1000).reshape(-1,1), # Have to make this remainder some small-ish number, otherwise the numbers might be too big for the np.float32 and will come out as zero. Currently plan to just use for train/val split, so definitely shouldn't need more than eg. 1000
+         x_chunk,
+         ],
     axis=-1
     ))
     np.random.shuffle(array_to_write)
@@ -181,6 +190,7 @@ types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 
 # DATA_PATH='/data/atlas/HplusWh/20241218_SeparateLargeRJets_NominalWeights/'
 DATA_PATH='/data/atlas/HplusWh/20250115_SeparateLargeRJets_NominalWeights_extrainfo_fixed/'
 DATA_PATH='/data/atlas/HplusWh/20250115_SeparateLargeRJets_NominalWeights_extrainfo_fixed/'
+DATA_PATH='/data/atlas/HplusWh/20250313_WithTrueInclusion_FixedOverlapWHsjet_SmallJetCloseToLargeJetRemovalDeltaR0.5/'
 MAX_CHUNK_SIZE = 100000
 # MAX_PER_DSID = {dsid : 10000000 for dsid in dsid_set}
 # MAX_PER_DSID[410470] = 100
@@ -213,6 +223,7 @@ for dsid in dsid_set:
         mWHs = []
         mHs = []
         dsids = []
+        eventNumbers = []
         current_chunk_size = 0
         total_events_written_for_sample = 0
         total_entries_written_for_sample = 0
@@ -226,7 +237,7 @@ for dsid in dsid_set:
             # print(path)
             # if path == '/data/atlas/HplusWh/20241128_ProcessedLightNtuples/user.rhulsken.mc16_13TeV.363355.She221_ZqqZvv.TOPQ1.e5525s3126r10201p4512.Nominal_v0_1l_out_root/user.rhulsken.31944615._000001.out.root':
             #     continue
-            x_chunk, y_chunk, weights_chunk, dsid_chunk, mWhs_chunk, mH_chunk, removals_chunk = process_single_file(filepath=path, target_channel=channel)
+            x_chunk, y_chunk, weights_chunk, dsid_chunk, mWhs_chunk, mH_chunk, removals_chunk, eventNumber_chunk = process_single_file(filepath=path, target_channel=channel)
             means=np.load(f'/data/atlas/baines/tmp2_highLevel_MetCut/{channel}_mean.npy')
             stds=np.load(f'/data/atlas/baines/tmp2_highLevel_MetCut/{channel}_std.npy')
             # if x_chunk.shape[0]>500:
@@ -241,9 +252,10 @@ for dsid in dsid_set:
             mWHs.append(mWhs_chunk)
             mHs.append(mH_chunk)
             dsids.append(dsid_chunk)
+            eventNumbers.append(eventNumber_chunk)
             current_chunk_size += x_chunk.shape[0]
             if (current_chunk_size > MAX_CHUNK_SIZE) or (file_n+1 == len(all_files)):
-                array_chunk = combine_arrays_for_writing(x_chunk=np.concatenate(x_parts, axis=0), y_chunk=np.concatenate(ys, axis=0), weights_chunk=np.concatenate(weights, axis=0), mWh_chunk=np.concatenate(mWHs, axis=0), dsids_chunk=np.concatenate(dsids, axis=0), mHs_chunk=np.concatenate(mHs, axis=0))
+                array_chunk = combine_arrays_for_writing(x_chunk=np.concatenate(x_parts, axis=0), y_chunk=np.concatenate(ys, axis=0), weights_chunk=np.concatenate(weights, axis=0), mWh_chunk=np.concatenate(mWHs, axis=0), dsids_chunk=np.concatenate(dsids, axis=0), mHs_chunk=np.concatenate(mHs, axis=0), eventNumber_chunk=np.concatenate(eventNumbers, axis=0))
                 # assert(False)
                 # assert(False)
                 if array_chunk.shape[0] > 0: # Check there's actually something in there
@@ -264,6 +276,7 @@ for dsid in dsid_set:
                 mWHs = []
                 mHs = []
                 dsids = []
+                eventNumbers = []
             # assert(False)
             for i in range(len(removals_chunk)):
                 removals[i]+=removals_chunk[i]
