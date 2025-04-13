@@ -23,6 +23,7 @@ from utils import Get_PtEtaPhiM_fromXYZT
 
 # %% Some basic setup
 # Some choices about the  process
+USE_ONE_NET = False
 IS_CATEGORICAL = True
 REMOVE_WHERE_TRUTH_WOULD_BE_CUT = False # Only want this if we are TRAINING the RECONSTRUCTION net! For predicting reco, or for training/predicting classification, we want these events to be present!
 INCLUDE_ALL_SELECTIONS = True
@@ -395,18 +396,32 @@ model_cfg = {'d_model': 256, 'dropout_p': 0.2, "embedding_size":10, "num_heads":
 if 0: # Old
     model = DeepSetsWithResidualSelfAttentionTriple(num_classes=num_classes, input_dim=N_Real_Vars-2, hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
 else:
-    model = DeepSetsWithResidualSelfAttentionVariable(num_attention_blocks=5, num_classes=3, input_dim=N_Real_Vars-2, hidden_dim=200,  dropout_p=0.1,  num_heads=4, embedding_size=16).to(device)
+    if USE_ONE_NET:
+        model = DeepSetsWithResidualSelfAttentionVariable(num_attention_blocks=5, num_classes=3, input_dim=N_Real_Vars-2, hidden_dim=200,  dropout_p=0.1,  num_heads=4, embedding_size=16).to(device)
+    else:
+        models = {
+            0:DeepSetsWithResidualSelfAttentionVariable(num_attention_blocks=3, num_classes=3, input_dim=N_Real_Vars-2, hidden_dim=200,  dropout_p=0.1,  num_heads=4, embedding_size=16).to(device)
+            1:DeepSetsWithResidualSelfAttentionVariable(num_attention_blocks=3, num_classes=3, input_dim=N_Real_Vars-2, hidden_dim=200,  dropout_p=0.1,  num_heads=4, embedding_size=16).to(device)
+        }
 if 1: # 
     print("WARNING: You are starting from a semi-pre-trained model state")
     # modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250302-224613_TrainingOutput/models/0/chkpt74_414975.pth" # DSSAR d_model=32,    d_head=8,    n_layers=8,    n_heads=8,    d_mlp=128,
     # modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250304-145036_TrainingOutput/models/0/chkpt163050.pth" # DSSAR d_model=32,    d_head=8,    n_layers=8,    n_heads=8,    d_mlp=128,
     # modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250305-195515_TrainingOutput/models/0/chkpt163050.pth" # DSSAR d_model=32,    d_head=8,    n_layers=8,    n_heads=8,    d_mlp=128,
     # modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250305-232917_TrainingOutput/models/0/chkpt162930.pth" # 
-    modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250307-191542_TrainingOutput/models/0/chkpt162930.pth" # DSSAR3 d_model=256, n_heads=4, num_embedding=10,
-    modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250313-162852_TrainingOutput/models/0/chkpt29_164550.pth" # DSSAR3 d_model=256, n_heads=4, num_embedding=10,
-    loaded_state_dict = torch.load(modelfile, map_location=torch.device(device))
-    model.load_state_dict(loaded_state_dict)
-    modeltag = modelfile.split('/')[-4].split('_')[0]
+    if USE_ONE_NET:
+        modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250307-191542_TrainingOutput/models/0/chkpt162930.pth" # DSSAR3 d_model=256, n_heads=4, num_embedding=10,
+        modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250313-162852_TrainingOutput/models/0/chkpt29_164550.pth" # DSSAR3 d_model=256, n_heads=4, num_embedding=10,
+        loaded_state_dict = torch.load(modelfile, map_location=torch.device(device))
+        model.load_state_dict(loaded_state_dict)
+        modeltag = modelfile.split('/')[-4].split('_')[0]
+    else:
+        modelfile1="/users/baines/Code/ChargedHiggs_ExperimentalML/output/output/20250321-124811_TrainingOutput/" # DSSAR3 d_model=256, n_heads=4, num_embedding=10,
+        modelfile1="/users/baines/Code/ChargedHiggs_ExperimentalML/output/output/20250321-124953_TrainingOutput/" # DSSAR3 d_model=256, n_heads=4, num_embedding=10,
+        loaded_state_dict = torch.load(modelfile, map_location=torch.device(device))
+        model.load_state_dict(loaded_state_dict)
+        modeltag = modelfile.split('/')[-4].split('_')[0]
+    else:
 
 
 

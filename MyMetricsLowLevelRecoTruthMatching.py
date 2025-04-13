@@ -182,7 +182,7 @@ class HEPMetrics:
             self.processed_weight_sums_per_dsid[d.item()] += weights[dsid == d].sum().item()
         self.current_update_point += n_batch
 
-    def compute_and_log(self, epoch, prefix="val", step=None, log_level=0, save=True, commit=None):
+    def compute_and_log(self, epoch, prefix="val", step=None, log_level=0, save=True, commit=None, verbose=True):
         # print("Accuracy calculated: ", self.accuracy.compute())
         if log_level > -1:
             # accuracies = self.compute_accuracy()
@@ -210,7 +210,7 @@ class HEPMetrics:
             metrics["epoch"] = epoch
         if save:
             wandb.log({**metrics, "epoch": epoch, "step":step}, commit=commit)
-        else:
+        elif verbose:
             print(metrics)
         return metrics
     

@@ -7,6 +7,52 @@ import matplotlib as mpl
 import einops
 
 # %%
+def print_inclusion(inclusion, types, print_not_included=True):
+    '''
+    returns the the inclusion string of an event, for nicely printing a single event for eg. debugging or mech interp
+    # inclusion shape [object]
+    # types shape [object]
+    '''
+    type_short_mapping = {0:'e', 1:'m', 2:'n', 3:'J', 4:'j'}
+    incl_str = ''
+    for obj in range(len(inclusion)):
+        if types[obj]!=5:
+            if inclusion[obj] == 0:
+                if print_not_included:
+                    incl_str += ' -'
+                    incl_str += type_short_mapping[types[obj].item()]
+                    incl_str += ' '
+                else:
+                    incl_str += ' -- '
+            elif inclusion[obj] == 1:
+                incl_str += ' H'
+                incl_str += type_short_mapping[types[obj].item()]
+                incl_str += ' '
+            elif inclusion[obj] >= 2:
+                incl_str += ' W'
+                incl_str += type_short_mapping[types[obj].item()]
+                incl_str += ' '
+    return incl_str
+
+def print_vars(infotensor, types):
+    '''
+    # Expects infosenor to have shape [1 objects 5] and contain px, py, pz, E, tagInfo
+    #       types to have shape [1 objects]
+    '''
+    types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 'ljetXbbTagged'}
+    types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5:'None'}
+    infotensor = torch.stack((*Get_PtEtaPhiM_fromXYZT(infotensor[...,0],infotensor[...,1],infotensor[...,2],infotensor[...,3],use_torch=True), infotensor[...,4]),dim=-1)[0]
+    types = types[0]
+    print(f'        {"Type":15s}, {"Pt":6s}, {"Eta":6s}, {"Phi":6s}, {"M":6s}')
+    for row in range(infotensor.shape[-2]):
+        if types_dict[types[row].item()]=='None':
+            continue
+        print(f"Object: {types_dict[types[row].item()]:10s}, ", end=" ")
+        for col in range(infotensor.shape[-1]):
+            print(f"{infotensor[row][col]:6.3f}, ", end='')
+        print('')
+
+# %%
     
 
 def check_valid(types, inclusion, padding_token, categorical, returnTypes = False):
@@ -292,19 +338,45 @@ def get_num_btags(x_part, types, pred_inclusion, tag_info_idx, use_torch=False):
 
 
 # %% Temporary testing cell
-def GetXYZT_FromPtEtaPhiM(pt, eta, phi, m):
+def GetXYZT_FromPtEtaPhiMOld(pt, eta, phi, m, use_torch=False):
     '''
     Takes in arrays of shape (n_batch[,n_obj],) for Pt, Eta, Phi and M
     of some objects and returns arrays of shape (n_batch[,n_obj],) containing 
     the X, Y, Z, and T(==E) of the objects. Each element of n_batch corresponds
     to one event, and each of the n_objs represents an object in the event.
     '''
-    x = pt*np.cos(phi)
-    y = pt*np.sin(phi)
-    z = pt*np.sinh(eta)
-    t = (np.sqrt(x*x + y*y + z*z + m*m))*(m >= 0) + (np.sqrt(np.maximum((x*x + y*y + z*z - m*m), np.zeros(len(m)))))*(m < 0)
-    return x, y, z, t
+    if not use_torch:
+        x = pt*np.cos(phi)
+        y = pt*np.sin(phi)
+        z = pt*np.sinh(eta)
+        t = (np.sqrt(x*x + y*y + z*z + m*m))*(m >= 0) + (np.sqrt(np.maximum((x*x + y*y + z*z - m*m), np.zeros(len(m)))))*(m < 0)
+        return x, y, z, t
+    else:
+        x = pt*torch.cos(phi)
+        y = pt*torch.sin(phi)
+        z = pt*torch.sinh(eta)
+        t = (torch.sqrt(x*x + y*y + z*z + m*m))*(m >= 0) + (torch.sqrt(torch.maximum((x*x + y*y + z*z - m*m), torch.zeros(len(m)))))*(m < 0)
+        return x, y, z, t
 
+def GetXYZT_FromPtEtaPhiM(pt, eta, phi, m, use_torch=False):
+    '''
+    Takes in arrays of shape (n_batch[,n_obj],) for Pt, Eta, Phi and M
+    of some objects and returns arrays of shape (n_batch[,n_obj],) containing 
+    the X, Y, Z, and T(==E) of the objects. Each element of n_batch corresponds
+    to one event, and each of the n_objs represents an object in the event.
+    '''
+    if not use_torch:
+        x = pt*np.cos(phi)
+        y = pt*np.sin(phi)
+        z = pt*np.sinh(eta)
+        t = np.sqrt(m**2 + (pt * np.cosh(eta))**2)
+        return x, y, z, t
+    else:
+        x = pt*torch.cos(phi)
+        y = pt*torch.sin(phi)
+        z = pt*torch.sinh(eta)
+        t = torch.sqrt(m**2 + (pt * torch.cosh(eta))**2)
+        return x, y, z, t
 
 def GetXYZT_FromPtEtaPhiE(pt, eta, phi, E):
     x,y,z,_=GetXYZT_FromPtEtaPhiM(pt, eta, phi, np.zeros_like(E))
