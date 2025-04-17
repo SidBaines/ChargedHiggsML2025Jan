@@ -56,6 +56,7 @@ if IS_XBB_TAGGED:
 else:
     N_CTX = 6 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root->Binary files we're reading in.
     types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet'}
+padding_token = N_CTX-1
 USE_DROPOUT = True
 BIN_WRITE_TYPE=np.float32
 max_n_objs_in_file = 15 # BE CAREFUL because this might change and if it does you ahve to rebinarise
@@ -438,6 +439,99 @@ elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
                 else:
                     object_features = identity + attention_output
             return self.classifier(object_features)
+    
+    class DeepSetsWithResidualSelfAttentionVariableTrueSkipBottleneck(nn.Module):
+        def __init__(self, bottleneck_attention=None, feature_set=['pt', 'eta', 'phi', 'm', 'tag'], use_lorentz_invariant_features=True, num_classes=3, hidden_dim=256, num_heads=4, dropout_p=0.0, embedding_size=32, num_attention_blocks=3, include_mlp=True, hidden_dim_mlp=None):
+            super().__init__()
+            self.bottleneck_attention = bottleneck_attention
+            self.num_attention_blocks = num_attention_blocks
+            self.include_mlp = include_mlp
+            self.use_lorentz_invariant_features = use_lorentz_invariant_features
+            if hidden_dim_mlp is None:
+                hidden_dim_mlp = hidden_dim
+
+            if use_lorentz_invariant_features:
+                self.invariant_features = LorentzInvariantFeatures(feature_set=feature_set)
+            
+            # Object type embedding
+            self.type_embedding = nn.Embedding(N_CTX, embedding_size)  # 5 object types
+            
+            # Initial per-object processing
+            self.object_net = nn.Sequential(
+                nn.Linear(len(feature_set) + embedding_size, hidden_dim),  # All features except type + type embedding
+                # nn.LayerNorm(hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim),
+            )
+            
+            # Create multiple attention blocks
+            self.attention_blocks = nn.ModuleList([
+                nn.ModuleDict({
+                    # 'layer_norm1': nn.LayerNorm(hidden_dim),
+                    'self_attention': nn.MultiheadAttention(
+                        embed_dim=hidden_dim,
+                        num_heads=num_heads,
+                        dropout=0.0,
+                        batch_first=True,
+                    ),
+                    **({f'bottleneck_down': nn.ModuleList([
+                        nn.Linear(hidden_dim, self.bottleneck_attention)
+                        for _ in range(num_heads)])} if (self.bottleneck_attention is not None) else {}),
+                    **({f'bottleneck_up': nn.ModuleList([
+                        nn.Linear(self.bottleneck_attention, hidden_dim)
+                        for _ in range(num_heads)])} if (self.bottleneck_attention is not None) else {}),
+                    # 'layer_norm2': nn.LayerNorm(hidden_dim),
+                    **({'post_attention': nn.Sequential(
+                        nn.Linear(hidden_dim, hidden_dim_mlp),
+                        nn.GELU(),
+                        nn.Dropout(dropout_p),
+                        nn.Linear(hidden_dim_mlp, hidden_dim),
+                    )} if self.include_mlp else {})
+                }) for _ in range(num_attention_blocks)
+            ])
+            # Final classification layers
+            self.classifier = nn.Sequential(
+                # nn.Linear(hidden_dim, hidden_dim),
+                # nn.ReLU(),
+                # nn.Dropout(dropout_p),
+                # nn.Linear(hidden_dim, hidden_dim // 2),
+                # nn.ReLU(),
+                # nn.Linear(hidden_dim // 2, num_classes)
+                nn.Linear(hidden_dim, num_classes)
+            )
+    
+        def forward(self, object_features, object_types):
+            # Get type embeddings and combine with features
+            type_emb = self.type_embedding(object_types)
+            if self.use_lorentz_invariant_features:
+                # invariant_features = self.invariant_features(object_features[...,:4])
+                invariant_features = self.invariant_features(object_features[...,:4])
+            else:
+                invariant_features = object_features[...,:4]
+            combined = torch.cat([invariant_features, object_features[...,4:], type_emb], dim=-1)
+            # Process each object
+            object_features = self.object_net(combined)
+            # Apply attention blocks
+            for block in self.attention_blocks:
+                # Store original features for residual connection
+                identity = object_features
+                # Apply self-attention
+                # normed_features = block['layer_norm1'](object_features)
+                attention_output, _ = block['self_attention'](
+                    object_features, object_features, object_features,
+                    key_padding_mask=(object_types==(N_CTX-1))
+                )
+                # Add residual connection and normalize
+                if self.include_mlp:
+                    residual = identity + attention_output
+                    identity = residual
+                    # normed_mlpin = block['layer_norm2'](residual)
+                    # Post-attention processing
+                    mlp_output = block['post_attention'](residual)
+                    object_features = identity + mlp_output
+                else:
+                    object_features = identity + attention_output
+            return self.classifier(object_features)
 elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP_OLD":
     class DeepSetsWithResidualSelfAttentionVariableTrueSkip(nn.Module):
         def __init__(self, input_dim=5, num_classes=3, hidden_dim=256, num_heads=4, dropout_p=0.0, embedding_size=32, num_attention_blocks=3, include_mlp=True):
@@ -600,7 +694,7 @@ if 1: # Load a pre-trained model
             modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250328-113053_TrainingOutput/models/Nplits2_ValIdx0/chkpt24_137075.pth"
             model = DeepSetsWithResidualSelfAttentionVariableTrueSkip(use_lorentz_invariant_features=True, include_mlp=True, num_attention_blocks=3, hidden_dim=152, hidden_dim_mlp=400, num_heads=4, embedding_size=10, num_classes=3, input_dim=N_Real_Vars,  dropout_p=0.0).to(device)
             HAS_MLP = True
-        elif 1: # Only use 4-vector (no btag info)
+        elif 0: # Only use 4-vector (no btag info)
             modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250410-124045_TrainingOutput/models/Nplits2_ValIdx0/chkpt14_82245.pth"
             EXCLUDE_TAG = True
             model = DeepSetsWithResidualSelfAttentionVariableTrueSkip(feature_set=['pt', 'eta', 'phi', 'm'], use_lorentz_invariant_features=True, include_mlp=HAS_MLP, num_attention_blocks=3, hidden_dim=400, hidden_dim_mlp=1, num_heads=2, embedding_size=10, num_classes=3, input_dim=N_Real_Vars-int(EXCLUDE_TAG),  dropout_p=0.0).to(device)
@@ -614,11 +708,62 @@ if 1: # Load a pre-trained model
             EXCLUDE_TAG = True
             HAS_MLP=False
             model = DeepSetsWithResidualSelfAttentionVariableTrueSkip(feature_set=['eta', 'phi'], use_lorentz_invariant_features=True, include_mlp=HAS_MLP, num_attention_blocks=1, hidden_dim=152, hidden_dim_mlp=300, num_heads=4, embedding_size=10, num_classes=3,  dropout_p=0.0).to(device)
-        elif 1: # Only use angles (no btag info, mass, pt)
+        elif 0: # Only use angles (no btag info, mass, pt)
             modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250410-161056_TrainingOutput/models/Nplits2_ValIdx0/chkpt9_54830.pth"
             EXCLUDE_TAG = True
             HAS_MLP=True
             model = DeepSetsWithResidualSelfAttentionVariableTrueSkip(feature_set=['eta', 'phi'], use_lorentz_invariant_features=True, include_mlp=HAS_MLP, num_attention_blocks=1, hidden_dim=300, hidden_dim_mlp=400, num_heads=4, embedding_size=10, num_classes=3,  dropout_p=0.0).to(device)
+        elif 0: # Only use angles (no btag info, mass, pt)
+            modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250413-185222_TrainingOutput/models/Nplits2_ValIdx0/chkpt3_21932.pth"
+            EXCLUDE_TAG = False
+            HAS_MLP=False
+            model = DeepSetsWithResidualSelfAttentionVariableTrueSkip(feature_set=['eta', 'phi', 'pt', 'm', 'tag'], use_lorentz_invariant_features=True, include_mlp=HAS_MLP, num_attention_blocks=3, hidden_dim=300, hidden_dim_mlp=1, num_heads=4, embedding_size=10, num_classes=3,  dropout_p=0.0).to(device)
+        elif 0: # Only use angles (no btag info, mass, pt)
+            modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250413-234444_TrainingOutput/models/Nplits2_ValIdx0/chkpt11_65796.pth"
+            EXCLUDE_TAG = True
+            HAS_MLP=False
+            model = DeepSetsWithResidualSelfAttentionVariableTrueSkipBottleneck(bottleneck_attention=1, feature_set=['eta', 'phi', 'pt', 'm'] + ['tag']*(not EXCLUDE_TAG), use_lorentz_invariant_features=True, include_mlp=HAS_MLP, num_attention_blocks=3, hidden_dim=300, hidden_dim_mlp=1, num_heads=4, embedding_size=10, num_classes=3,  dropout_p=0.0).to(device)
+            fwd_hooks = []
+            hooks = []
+            dummy_cache = MechInterpUtils.ActivationCache()
+            fwd_hooks.extend(MechInterpUtils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=False, bottleneck_attention_output=model.bottleneck_attention))
+            for module, hook_fn in fwd_hooks:
+                hooks.append(module.register_forward_hook(hook_fn, with_kwargs=True))
+        elif 0: # Only use angles (no btag info, mass, pt)
+            modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250414-170725_TrainingOutput/models/Nplits2_ValIdx0/chkpt4_27415.pth"
+            EXCLUDE_TAG = True
+            HAS_MLP=False
+            model = DeepSetsWithResidualSelfAttentionVariableTrueSkipBottleneck(bottleneck_attention=1, feature_set=['eta', 'phi', 'pt', 'm'] + ['tag']*(not EXCLUDE_TAG), use_lorentz_invariant_features=True, include_mlp=HAS_MLP, num_attention_blocks=3, hidden_dim=300, hidden_dim_mlp=1, num_heads=4, embedding_size=10, num_classes=3,  dropout_p=0.0).to(device)
+            fwd_hooks = []
+            hooks = []
+            dummy_cache = MechInterpUtils.ActivationCache()
+            fwd_hooks.extend(MechInterpUtils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=True, min_attention=0.5, bottleneck_attention_output=model.bottleneck_attention))
+            for module, hook_fn in fwd_hooks:
+                hooks.append(module.register_forward_hook(hook_fn, with_kwargs=True))
+        elif 0: # 
+            modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250414-221359_TrainingOutput/models/Nplits2_ValIdx0/chkpt2_16449.pth"
+            EXCLUDE_TAG = False
+            HAS_MLP=False
+            model = DeepSetsWithResidualSelfAttentionVariableTrueSkipBottleneck(bottleneck_attention=1, feature_set=['eta', 'phi', 'pt', 'm'] + ['tag']*(not EXCLUDE_TAG), use_lorentz_invariant_features=True, include_mlp=HAS_MLP, num_attention_blocks=3, hidden_dim=300, hidden_dim_mlp=1, num_heads=4, embedding_size=10, num_classes=3,  dropout_p=0.0).to(device)
+            fwd_hooks = []
+            hooks = []
+            dummy_cache = MechInterpUtils.ActivationCache()
+            fwd_hooks.extend(MechInterpUtils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=False, min_attention=None, bottleneck_attention_output=model.bottleneck_attention))
+            for module, hook_fn in fwd_hooks:
+                hooks.append(module.register_forward_hook(hook_fn, with_kwargs=True))
+        elif 1: # ?Interesting to switch between ~chkpt4 and ~chkpt9 or so because it seems to have a step change in ability
+            # modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250414-221359_TrainingOutput/models/Nplits2_ValIdx0/chkpt4_27415.pth"
+            modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250414-221359_TrainingOutput/models/Nplits2_ValIdx0/chkpt10_60313.pth"
+            # modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250414-221359_TrainingOutput/models/Nplits2_ValIdx0/chkpt17_98694.pth"
+            EXCLUDE_TAG = False
+            HAS_MLP=False
+            model = DeepSetsWithResidualSelfAttentionVariableTrueSkipBottleneck(bottleneck_attention=1, feature_set=['eta', 'phi', 'pt', 'm'] + ['tag']*(not EXCLUDE_TAG), use_lorentz_invariant_features=True, include_mlp=HAS_MLP, num_attention_blocks=3, hidden_dim=300, hidden_dim_mlp=1, num_heads=4, embedding_size=10, num_classes=3,  dropout_p=0.0).to(device)
+            fwd_hooks = []
+            hooks = []
+            dummy_cache = MechInterpUtils.ActivationCache()
+            fwd_hooks.extend(MechInterpUtils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=False, min_attention=None, bottleneck_attention_output=model.bottleneck_attention))
+            for module, hook_fn in fwd_hooks:
+                hooks.append(module.register_forward_hook(hook_fn, with_kwargs=True))
     else:
         assert(False)
     loaded_state_dict = torch.load(modelfile, map_location=torch.device(device))
@@ -640,10 +785,38 @@ if 1:
             print(F"Processing batch {batch_idx}/{num_batches_to_process}")
         batch = next(val_dataloader)
         x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
-        outputs = model(x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types).squeeze()
+        outputs = model(x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+        # outputs, cache = MechInterpUtils.run_with_cache_and_bottleneck(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+        outputs = outputs.squeeze()
         val_metrics_MCWts.update(outputs, x[...,-1], MCWts, dsids, types)
 
-rv=val_metrics_MCWts.compute_and_log(1,'val', 0, 3, False, None)
+rv=val_metrics_MCWts.compute_and_log(1,'val', 0, 3, False, None, calc_all=True)
+
+
+# %%
+# assert(False)
+
+# %%
+# Evaluate the model BUT only allow each object to pay attention to ONE other object (force 'single-attention')
+if 0:
+    val_metrics_MCWts = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), total_weights_per_dsid=val_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000])
+    val_dataloader._reset_indices()
+    val_metrics_MCWts.reset()
+    model.eval()
+    num_batches_to_process = int(30000 * (1/batch_size))
+    # num_batches_to_process = len(val_dataloader)
+    for batch_idx in range(num_batches_to_process):
+        if ((batch_idx%10)==9):
+            print(F"Processing batch {batch_idx}/{num_batches_to_process}")
+        batch = next(val_dataloader)
+        x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
+        # outputs = model(x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types).squeeze()
+        # cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+        outputs, cache = MechInterpUtils.run_with_cache_and_singleAttention(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+        outputs = outputs.squeeze()
+        val_metrics_MCWts.update(outputs, x[...,-1], MCWts, dsids, types)
+
+rvsa=val_metrics_MCWts.compute_and_log(1,'val', 0, 3, False, None)
 
 # %%
 # Check the incorrect-reconstruction rate
@@ -737,7 +910,6 @@ batch = next(val_dataloader)
 x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
 outputs = model(x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types).squeeze()
 n=10
-padding_token = N_CTX-1
 print((outputs.argmax(dim=-1) * (types!=padding_token).to(int))[:n])
 print((x[:n,:,-1]>1)*2 + (x[:n,:,-1]==1))
 # print(x[:n,:,-1].to(int))
@@ -855,6 +1027,8 @@ chosen_sample_index = 2
 val_dataloader._reset_indices()
 batch = next(val_dataloader)
 x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
+# cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+# outputs, cache = MechInterpUtils.run_with_cache_and_singleAttention(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
 cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
 for chosen_sample_index in range(10,20):
     print("-------------------------------------------------------------------------------------")
@@ -869,7 +1043,8 @@ for chosen_sample_index in range(10,20):
     print(f"Pred inclusion: {print_inclusion(outs.argmax(dim=-1).squeeze(), types[chosen_sample_index:chosen_sample_index+1,:].squeeze())}")
     reconstructed_object_types = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'large-R jet', 4: 'small-R jet', 5:'None'}
     for layer in range(len(model.attention_blocks)):
-        attention_pattern = cache[f'block_{layer}_attention']['attn_weights'][chosen_sample_index]
+        # attention_pattern = cache[f'block_{layer}_attention']['attn_weights'][chosen_sample_index]
+        attention_pattern = cache[f'block_{layer}_attention']['attn_weights_per_head'][chosen_sample_index]
         objselection = (types[chosen_sample_index:chosen_sample_index+1]!=(N_CTX-1)).flatten() # This allows us to ignore the 'pad' tokens (ie the 'nothing' particles)
         if SHOW_ALL:
             my_names=[f"{reconstructed_object_types[types[chosen_sample_index, obj].item()]:10} (E={x[chosen_sample_index,obj,3]:.2f})(M={Get_PtEtaPhiM_fromXYZT(x[chosen_sample_index,obj,0], x[chosen_sample_index,obj,1], x[chosen_sample_index,obj,2], x[chosen_sample_index,obj,3], use_torch=True)[-1]:.2f})" for obj in range(attention_pattern.shape[2])]
@@ -885,6 +1060,14 @@ for chosen_sample_index in range(10,20):
                 # attention_head_names=[f"L0H{i}" for i in range(model.cfg.n_heads)],
             )
         )
+
+# %%
+if 1: # See how many of the attention weights are far from 1.0 or 0.0
+    for layer in range(3):
+        for head in range(4):
+            for sample_idx in range(10):
+                print(f"{cache[f'block_{layer}_attention']['attn_weights_per_head'][sample_idx, head][cache[f'block_{layer}_attention']['attn_weights_per_head'][sample_idx,head]<0.9].max().item():.2e}", end="   ")
+            print()
 
 # %%
 # DO THIS AGAIN USING CIRCUITSVIS
@@ -925,12 +1108,12 @@ else:
                 plt.title(f"Layer {layer}, Head {head}")
         plt.suptitle("Average type attention patterns (rows are queries, cols are keys)")
         plt.tight_layout()
-        plt.savefig(f'tmp5{selfex*"_selfex"}.pdf')
+        plt.savefig(f'tmp8{selfex*"_selfex"}.pdf')
         plt.show()
 
 
 # %%
-if 1: # Cell to show the attention output sizes (Loop over layer/head, absolute then sum along the dmodel dimension, mean along the objects (excluding Nones) and then batch)
+if 0: # Cell to show the attention output sizes (Loop over layer/head, absolute then sum along the dmodel dimension, mean along the objects (excluding Nones) and then batch)
     #   Also has per-object
     import einops
 
@@ -1079,6 +1262,7 @@ if 1:
         print("")
 
 
+    # And now same thing but restrict to specific objects
     for direction in range(3):
         print(f"Direction: {direction}")
         for object_type in range(5):
@@ -1088,7 +1272,6 @@ if 1:
         print("")
         print("")
 
-# And now same thing but restrict to specific objects
 
 # %%
 importlib.reload(MechInterpUtils)
@@ -1217,6 +1400,11 @@ if 1: # Test what happens if we add random objects...
 if 0: # Takes a while as it runs a lot of symbolic regression
     importlib.reload(MechInterpUtils)
     results = MechInterpUtils.main_sae_analysis(model, val_dataloader, N_Real_Vars, device=device, hidden_dim_sae=2)
+
+# %%
+if 1: # Takes a while as it runs a lot of symbolic regression
+    importlib.reload(MechInterpUtils)
+    results = MechInterpUtils.main_symbolic_regression(model, val_dataloader, N_Real_Vars-int(EXCLUDE_TAG), device=device)
 
 # %%
 inverse_types_dict = {types_dict[type_key]:type_key for type_key in types_dict.keys()}
@@ -1351,7 +1539,7 @@ for batch_idx in range(-10,-1):
 
 
 # %%
-if 1: # Now an ablation study
+if 0: # Now an ablation study
     importlib.reload(MechInterpUtils)
     val_dataloader._reset_indices()
     batch = next(val_dataloader)
@@ -1373,13 +1561,16 @@ if 1: # Now an ablation study
 
 
 # %%
+# Full ablation study
+# Cell to run over attention heads and ablate to see model performance
 # Define a helper 'evaluate' function
 def model_eval(model, dataloader, interventions, verbose=False):
     metric_tracker = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(dataloader.get_total_samples()), total_weights_per_dsid=dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000])
     dataloader._reset_indices()
     metric_tracker.reset()
     model.eval()
-    num_samples = 30000
+    # num_samples = 30000
+    num_samples = 5000
     num_batches_to_process = int(num_samples * (1/batch_size))
     for batch_idx in range(num_batches_to_process):
         if ((batch_idx%10)==9) and verbose:
@@ -1389,27 +1580,69 @@ def model_eval(model, dataloader, interventions, verbose=False):
         outputs, _ = MechInterpUtils.run_with_interventions(model, (x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types), interventions=interventions)
         metric_tracker.update(outputs, x[...,-1], MCWts, dsids, types)
 
-    return metric_tracker.compute_and_log(1,'val', 0, 3, False, None)
+    return metric_tracker.compute_and_log(1,'val', 0, 3, False, None, False, calc_all=True)
 
 if 1: # Evaluate the model with different attention heads ablated
-    results = {}
-    results[tuple()]=rv
+    results_single_ablation = {}
+    results_single_ablation[tuple()]=rv
     for layer in range(len(model.attention_blocks)):
         for head in range(model.attention_blocks[0].self_attention.num_heads):
             interventions = [
                 (f'attention_blocks.{layer}.self_attention', lambda x: MechInterpUtils.ablate_attention_head(x, head_idx=head, num_heads=model.attention_blocks[0].self_attention.num_heads))
             ]
-            results[(layer, head)] = model_eval(model, val_dataloader, interventions)
-            print(f"{layer}, {head}: lvbball={results[(layer, head)]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results[(layer, head)]['val/PerfectRecoPct_all_qqbb']:.4f}")
-
-for k in results.keys():
-    print(f"{str(k):6s}: lvbball={results[k]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results[k]['val/PerfectRecoPct_all_qqbb']:.4f}")
+            results_single_ablation[(layer, head)] = model_eval(model, val_dataloader, interventions)
+            print(f"{layer}, {head}: lvbball={results_single_ablation[(layer, head)]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results_single_ablation[(layer, head)]['val/PerfectRecoPct_all_qqbb']:.4f}")
+    if 0:
+        for k in results_single_ablation.keys():
+            print(f"{str(k):6s}: lvbball={results_single_ablation[k]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results_single_ablation[k]['val/PerfectRecoPct_all_qqbb']:.4f}")
+    elif 0: # Print detailed results per channel
+        print("              lvbb   Corr / Over / Undr / Miss\tqqbb   Corr / Over / Undr / Miss")
+        for k in results_single_ablation.keys():
+            print(f"{str(k):12s}: ", end="")
+            print(f"lvbb = {results_single_ablation[k]['val/PerfectRecoPct_all_lvbb']*100:4.1f}", end="")
+            print(f" / {results_single_ablation[k]['val/Pct_OverPredict_all_lvbb']*100:4.1f}", end="")
+            print(f" / {results_single_ablation[k]['val/Pct_UnderPredict_all_lvbb']*100:4.1f}", end="")
+            print(f" / {results_single_ablation[k]['val/Pct_MisPredict_all_lvbb']*100:4.1f}", end="\t")
+            print(f"qqbb = {results_single_ablation[k]['val/PerfectRecoPct_all_qqbb']*100:4.1f}", end="")
+            print(f" / {results_single_ablation[k]['val/Pct_OverPredict_all_qqbb']*100:4.1f}", end="")
+            print(f" / {results_single_ablation[k]['val/Pct_UnderPredict_all_qqbb']*100:4.1f}", end="")
+            print(f" / {results_single_ablation[k]['val/Pct_MisPredict_all_qqbb']*100:4.1f}")
+    elif 1: # Print detailed results per reconstruction category
+        # There are 6 ways to reconstruct an event correctly
+        # 0: small-R-pair H, small-R-pair W
+        # 1: small-R-pair H, leptonic-W
+        # 2: small-R-pair H, large-R-pair W
+        # 3: large-R-pair H, small-R-pair W
+        # 4: large-R-pair H, leptonic-W
+        # 5: large-R-pair H, large-R-pair W
+        if 0: # All in one line
+            for category in range(6):
+                print(f'cat{category}   Corr / Over / Undr / Miss', end="\t")
+            print()
+            for k in results_single_ablation.keys():
+                print(f"{str(k):12s}: ", end="")
+                for category in range(6):
+                    print(f"cat{category} = {results_single_ablation[k][f'val/PerfectRecoPct_all_cat{category}']*100:4.1f}", end="")
+                    print(f" / {results_single_ablation[k][f'val/Pct_OverPredict_all_cat{category}']*100:4.1f}", end="")
+                    print(f" / {results_single_ablation[k][f'val/Pct_UnderPredict_all_cat{category}']*100:4.1f}", end="")
+                    print(f" / {results_single_ablation[k][f'val/Pct_MisPredict_all_cat{category}']*100:4.1f}", end="\t")
+                print()
+        else: # Print in separate lines
+            print(f'catego Corr / Over / Undr / Miss', end="\t")
+            for k in results_single_ablation.keys():
+                print(f"{str(k):12s}: ")
+                for category in range(6):
+                    print(f"cat{category} = {results_single_ablation[k][f'val/PerfectRecoPct_all_cat{category}']*100:4.1f}", end="")
+                    print(f" / {results_single_ablation[k][f'val/Pct_OverPredict_all_cat{category}']*100:4.1f}", end="")
+                    print(f" / {results_single_ablation[k][f'val/Pct_UnderPredict_all_cat{category}']*100:4.1f}", end="")
+                    print(f" / {results_single_ablation[k][f'val/Pct_MisPredict_all_cat{category}']*100:4.1f}")
+                print()
 
 
 # %%
 if 1: # Evaluate the model with different PAIRS OF attention heads ablated
-    results = {}
-    results['no ablation']=rv
+    results_pairs = {}
+    results_pairs['no ablation']=rv
     for layer in range(len(model.attention_blocks)):
         for head in range(model.attention_blocks[0].self_attention.num_heads):
             for layer2 in range(layer, len(model.attention_blocks)):
@@ -1418,38 +1651,82 @@ if 1: # Evaluate the model with different PAIRS OF attention heads ablated
                         (f'attention_blocks.{layer}.self_attention', lambda x: MechInterpUtils.ablate_attention_head(x, head_idx=head, num_heads=model.attention_blocks[0].self_attention.num_heads)),
                         (f'attention_blocks.{layer2}.self_attention', lambda x: MechInterpUtils.ablate_attention_head(x, head_idx=head2, num_heads=model.attention_blocks[0].self_attention.num_heads)),
                     ]
-                    results[f'{layer},{head}  {layer2},{head2}'] = model_eval(model, val_dataloader, interventions)
-                    print(f"{layer},{head},  {layer2},{head2}: lvbball={results[f'{layer},{head}  {layer2},{head2}']['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results[f'{layer},{head}  {layer2},{head2}']['val/PerfectRecoPct_all_qqbb']:.4f}")
+                    results_pairs[f'{layer},{head}  {layer2},{head2}'] = model_eval(model, val_dataloader, interventions)
+                    print(f"{layer},{head},  {layer2},{head2}: lvbball={results_pairs[f'{layer},{head}  {layer2},{head2}']['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results_pairs[f'{layer},{head}  {layer2},{head2}']['val/PerfectRecoPct_all_qqbb']:.4f}")
+    if 0:
+        for k in results_pairs.keys():
+            print(f"{str(k):6s}: lvbball={results_pairs[k]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results_pairs[k]['val/PerfectRecoPct_all_qqbb']:.4f}")
+    elif 0:
+        print("              lvbb   Corr / Over / Undr / Miss\tqqbb   Corr / Over / Undr / Miss")
+        for k in results_pairs.keys():
+            print(f"{str(k):12s}: ", end="")
+            print(f"lvbb = {results_pairs[k]['val/PerfectRecoPct_all_lvbb']*100:4.1f}", end="")
+            print(f" / {results_pairs[k]['val/Pct_OverPredict_all_lvbb']*100:4.1f}", end="")
+            print(f" / {results_pairs[k]['val/Pct_UnderPredict_all_lvbb']*100:4.1f}", end="")
+            print(f" / {results_pairs[k]['val/Pct_MisPredict_all_lvbb']*100:4.1f}", end="\t")
+            print(f"qqbb = {results_pairs[k]['val/PerfectRecoPct_all_qqbb']*100:4.1f}", end="")
+            print(f" / {results_pairs[k]['val/Pct_OverPredict_all_qqbb']*100:4.1f}", end="")
+            print(f" / {results_pairs[k]['val/Pct_UnderPredict_all_qqbb']*100:4.1f}", end="")
+            print(f" / {results_pairs[k]['val/Pct_MisPredict_all_qqbb']*100:4.1f}")
+            # print('-'*(12+2+len('lvbb   Corr / Over / Undr / Miss')+2+len('qqbb   Corr / Over / Undr / Miss')))
+    elif 1: # Print detailed results per reconstruction category
+        # There are 6 ways to reconstruct an event correctly
+        # 0: small-R-pair H, small-R-pair W
+        # 1: small-R-pair H, leptonic-W
+        # 2: small-R-pair H, large-R-pair W
+        # 3: large-R-pair H, small-R-pair W
+        # 4: large-R-pair H, leptonic-W
+        # 5: large-R-pair H, large-R-pair W
+        if 0: # All in one line
+            for category in range(6):
+                print(f'cat{category}   Corr / Over / Undr / Miss', end="\t")
+            print()
+            for k in results_single_ablation.keys():
+                print(f"{str(k):12s}: ", end="")
+                for category in range(6):
+                    print(f"cat{category} = {results_single_ablation[k][f'val/PerfectRecoPct_all_cat{category}']*100:4.1f}", end="")
+                    print(f" / {results_single_ablation[k][f'val/Pct_OverPredict_all_cat{category}']*100:4.1f}", end="")
+                    print(f" / {results_single_ablation[k][f'val/Pct_UnderPredict_all_cat{category}']*100:4.1f}", end="")
+                    print(f" / {results_single_ablation[k][f'val/Pct_MisPredict_all_cat{category}']*100:4.1f}", end="\t")
+                print()
+        else: # Print in separate lines
+            print(f'catego Corr / Over / Undr / Miss', end="\t")
+            for k in results_single_ablation.keys():
+                print(f"{str(k):12s}: ")
+                for category in range(6):
+                    print(f"cat{category} = {results_single_ablation[k][f'val/PerfectRecoPct_all_cat{category}']*100:4.1f}", end="")
+                    print(f" / {results_single_ablation[k][f'val/Pct_OverPredict_all_cat{category}']*100:4.1f}", end="")
+                    print(f" / {results_single_ablation[k][f'val/Pct_UnderPredict_all_cat{category}']*100:4.1f}", end="")
+                    print(f" / {results_single_ablation[k][f'val/Pct_MisPredict_all_cat{category}']*100:4.1f}")
+                print()
 
-for k in results.keys():
-    print(f"{str(k):6s}: lvbball={results[k]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results[k]['val/PerfectRecoPct_all_qqbb']:.4f}")
 
 # %%
 if 1: # Evaluate the model with different FULL LAYERS of attention heads removed
-    results = {}
-    results['no ablation']=rv
+    results_layers = {}
+    results_layers['no ablation']=rv
     for layer in range(len(model.attention_blocks)):
         interventions = [
             (f'attention_blocks.{layer}.self_attention', lambda x, h=h: MechInterpUtils.ablate_attention_head(x, head_idx=h, num_heads=model.attention_blocks[0].self_attention.num_heads)) for h in range(model.attention_blocks[0].self_attention.num_heads)
         ]
-        results[layer] = model_eval(model, val_dataloader, interventions)
-        print(f"Layer {layer}: lvbball={results[layer]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results[layer]['val/PerfectRecoPct_all_qqbb']:.4f}")
+        results_layers[layer] = model_eval(model, val_dataloader, interventions)
+        print(f"Layer {layer}: lvbball={results_layers[layer]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results_layers[layer]['val/PerfectRecoPct_all_qqbb']:.4f}")
 
-for k in results.keys():
-    print(f"{str(k):6s}: lvbball={results[k]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results[k]['val/PerfectRecoPct_all_qqbb']:.4f}")
+for k in results_layers.keys():
+    print(f"{str(k):6s}: lvbball={results_layers[k]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results_layers[k]['val/PerfectRecoPct_all_qqbb']:.4f}")
 
 # %%
 if 1: # Evaluate the model with ALL the attention heads removed
-    results = {}
-    results['no ablation']=rv
+    results_all_removed = {}
+    results_all_removed['no ablation']=rv
     interventions = []
     interventions+= [(f'attention_blocks.{0}.self_attention', lambda x, h=h: MechInterpUtils.ablate_attention_head(x, head_idx=h, num_heads=model.attention_blocks[0].self_attention.num_heads)) for h in range(model.attention_blocks[0].self_attention.num_heads)]
     interventions+= [(f'attention_blocks.{1}.self_attention', lambda x, h=h: MechInterpUtils.ablate_attention_head(x, head_idx=h, num_heads=model.attention_blocks[0].self_attention.num_heads)) for h in range(model.attention_blocks[0].self_attention.num_heads)]
-    results['All attn ablated'] = model_eval(model, val_dataloader, interventions)
-    print(f"All ablated: lvbball={results['All attn ablated']['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results['All attn ablated']['val/PerfectRecoPct_all_qqbb']:.4f}")
+    results_all_removed['All attn ablated'] = model_eval(model, val_dataloader, interventions)
+    print(f"All ablated: lvbball={results_all_removed['All attn ablated']['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results_all_removed['All attn ablated']['val/PerfectRecoPct_all_qqbb']:.4f}")
 
-for k in results.keys():
-    print(f"{str(k):6s}: lvbball={results[k]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results[k]['val/PerfectRecoPct_all_qqbb']:.4f}")
+for k in results_all_removed.keys():
+    print(f"{str(k):6s}: lvbball={results_all_removed[k]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results_all_removed[k]['val/PerfectRecoPct_all_qqbb']:.4f}")
 
 
 
@@ -1590,10 +1867,4 @@ if 1:
     
     # Now run the model again with this new input
     outputs_updated = model(x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types).squeeze()
-    print(f"True inclusion: {print_inclusion(x[chosen_sample_index:chosen_sample_index+1,:, -1].squeeze(), types[chosen_sample_index:chosen_sample_index+1,:].squeeze())}")
-    print(f"Pred inclusion: {print_inclusion(outputs_updated[chosen_sample_index].argmax(dim=-1).squeeze(), types[chosen_sample_index:chosen_sample_index+1,:].squeeze())}")
-    print(outputs_updated[chosen_sample_index, types[chosen_sample_index]!=N_CTX-1].transpose(0,1))
-
-
-
-# %%
+    print(f"True inclusion: {print_inclusion(x[
