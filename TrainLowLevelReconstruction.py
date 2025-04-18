@@ -35,7 +35,8 @@ import matplotlib.pyplot as plt
 from sklearn.metrics import roc_auc_score
 import shutil
 # from MyMetricsLowLevel import HEPMetrics, HEPLoss, init_wandb
-from MyMetricsLowLevelRecoTruthMatching import HEPMetrics, HEPLoss, init_wandb
+from MyMetricsLowLevelRecoTruthMatching import HEPMetrics, HEPLoss, HEPLossWithEntropy, init_wandb
+# from MyMetricsLowLevelRecoTruthMatchingTmp import HEPMetrics, HEPLoss, init_wandb
 import functools
 
 # %%
@@ -58,11 +59,13 @@ else:
 
 # Some choices about the training process
 # Assumes that the data has already been binarised
+USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION = False # Bool. If true, we'll apply a loss penalty which encourages the attention weights to follow a distribution close to a specific entropy (can make this 0 for close to delta function ie 'pay attention to exactly one particle', log(2) for close to 'pay attention to exactly two particles', ...); aim of this is to make the model more interpretable
+ATTENTION_OUTPUT_BOTTLENECK_SIZE = 1 # None or integer. If not None, then we will apply a linear reduction then expansion to the attention output (per head) to this integer, to reduce the dimensionality of data that can be passed around; aim of this is to make the model more interpretable
 IS_CATEGORICAL = True
 PHI_ROTATED = False
 REMOVE_WHERE_TRUTH_WOULD_BE_CUT = True
-MODEL_ARCH="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP"
-TAG_INFO_INPUT=False
+MODEL_ARCH="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP_WITH_BOTTLENECK"
+TAG_INFO_INPUT=True
 # MODEL_ARCH="DEEPSETS_RESIDUAL_LONGCLASSIFIER"
 # if not (MODEL_ARCH=="HYBRID_SELFATTENTION_GATED"):
 if True:
@@ -506,6 +509,98 @@ elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
                         dropout=0.0,
                         batch_first=True,
                     ),
+                    # 'layer_norm2': nn.LayerNorm(hidden_dim),
+                    **({'post_attention': nn.Sequential(
+                        nn.Linear(hidden_dim, hidden_dim_mlp),
+                        nn.GELU(),
+                        nn.Dropout(dropout_p),
+                        nn.Linear(hidden_dim_mlp, hidden_dim),
+                    )} if self.include_mlp else {})
+                }) for _ in range(num_attention_blocks)
+            ])
+            # Final classification layers
+            self.classifier = nn.Sequential(
+                # nn.Linear(hidden_dim, hidden_dim),
+                # nn.ReLU(),
+                # nn.Dropout(dropout_p),
+                # nn.Linear(hidden_dim, hidden_dim // 2),
+                # nn.ReLU(),
+                # nn.Linear(hidden_dim // 2, num_classes)
+                nn.Linear(hidden_dim, num_classes)
+            )
+    
+        def forward(self, object_features, object_types):
+            # Get type embeddings and combine with features
+            type_emb = self.type_embedding(object_types)
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                # invariant_features = self.invariant_features(object_features[...,:4])
+                invariant_features = self.invariant_features(object_features[...,:4])
+            else:
+                invariant_features = object_features[...,:4]
+            combined = torch.cat([invariant_features, object_features[...,4:], type_emb], dim=-1)
+            # Process each object
+            object_features = self.object_net(combined)
+            # Apply attention blocks
+            for block in self.attention_blocks:
+                # Store original features for residual connection
+                identity = object_features
+                # Apply self-attention
+                # normed_features = block['layer_norm1'](object_features)
+                attention_output, _ = block['self_attention'](
+                    object_features, object_features, object_features,
+                    key_padding_mask=(object_types==(N_CTX-1))
+                )
+                # Add residual connection and normalize
+                if self.include_mlp:
+                    residual = identity + attention_output
+                    identity = residual
+                    # normed_mlpin = block['layer_norm2'](residual)
+                    # Post-attention processing
+                    mlp_output = block['post_attention'](residual)
+                    object_features = identity + mlp_output
+                else:
+                    object_features = identity + attention_output
+            return self.classifier(object_features)
+elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP_WITH_BOTTLENECK":
+    class DeepSetsWithResidualSelfAttentionVariableTrueSkipBottleneck(nn.Module):
+        def __init__(self, bottleneck_attention=None, feature_set=['pt', 'eta', 'phi', 'm', 'tag'], num_classes=3, hidden_dim=256, num_heads=4, dropout_p=0.0, embedding_size=32, num_attention_blocks=3, include_mlp=True, hidden_dim_mlp=None):
+            super().__init__()
+            self.bottleneck_attention = bottleneck_attention
+            self.num_attention_blocks = num_attention_blocks
+            self.include_mlp = include_mlp
+            if hidden_dim_mlp is None:
+                hidden_dim_mlp = hidden_dim
+
+            if USE_LORENTZ_INVARIANT_FEATURES:
+                self.invariant_features = LorentzInvariantFeatures(feature_set=feature_set)
+            
+            # Object type embedding
+            self.type_embedding = nn.Embedding(N_CTX, embedding_size)  # 5 object types
+            
+            # Initial per-object processing
+            self.object_net = nn.Sequential(
+                nn.Linear(len(feature_set) + embedding_size, hidden_dim),  # All features except type + type embedding
+                # nn.LayerNorm(hidden_dim),
+                nn.ReLU(),
+                nn.Linear(hidden_dim, hidden_dim),
+            )
+            
+            # Create multiple attention blocks
+            self.attention_blocks = nn.ModuleList([
+                nn.ModuleDict({
+                    # 'layer_norm1': nn.LayerNorm(hidden_dim),
+                    'self_attention': nn.MultiheadAttention(
+                        embed_dim=hidden_dim,
+                        num_heads=num_heads,
+                        dropout=0.0,
+                        batch_first=True,
+                    ),
+                    **({f'bottleneck_down': nn.ModuleList([
+                        nn.Linear(hidden_dim, self.bottleneck_attention)
+                        for _ in range(num_heads)])} if (self.bottleneck_attention is not None) else {}),
+                    **({f'bottleneck_up': nn.ModuleList([
+                        nn.Linear(self.bottleneck_attention, hidden_dim)
+                        for _ in range(num_heads)])} if (self.bottleneck_attention is not None) else {}),
                     # 'layer_norm2': nn.LayerNorm(hidden_dim),
                     **({'post_attention': nn.Sequential(
                         nn.Linear(hidden_dim, hidden_dim_mlp),
@@ -1403,7 +1498,7 @@ models = {}
 fit_histories = {}
 model_n = 0
 
-num_blocks_variable=1
+num_blocks_variable=6
 num_clasifierlayers_variable=8
 if MODEL_ARCH=="TRANSFORMER":
     # Create the model with the desired properties
@@ -1435,7 +1530,9 @@ elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X2":
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X3":
     model_cfg = {'d_model': 300, 'dropout_p': 0.2, "embedding_size":10, "num_heads":4}
 elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
-    model_cfg = {'include_mlp':False, 'd_model': 152, 'd_mlp': 300, 'num_blocks':num_blocks_variable, 'dropout_p': 0.0, "embedding_size":10, "num_heads":4}
+    model_cfg = {'include_mlp':False, 'd_model': 300, 'd_mlp': 300, 'num_blocks':num_blocks_variable, 'dropout_p': 0.0, "embedding_size":10, "num_heads":4}
+elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP_WITH_BOTTLENECK":
+    model_cfg = {'include_mlp':False, 'd_model': 200, 'd_mlp': 300, 'num_blocks':num_blocks_variable, 'dropout_p': 0.0, "embedding_size":10, "num_heads":4}
 elif MODEL_ARCH=="SINGLE_SELFATTENTION":
     model_cfg = {'layer_norm_input':True, 'skip_connection':True, 'include_mlp':False, 'd_model': 400, 'd_mlp': 200, 'num_blocks':num_blocks_variable, 'dropout_p': 0.0, "embedding_size":10, "num_heads":4}
 elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE":
@@ -1463,7 +1560,9 @@ elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL":
 elif MODEL_ARCH=="DEEPSETS_SELFATTENTION_RESIDUAL_X3":
     models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionTriple(num_classes=num_classes, input_dim=4+int(TAG_INFO_INPUT), hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
 elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":
-    models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionVariableTrueSkip(feature_set=['phi', 'eta']+['tag']*TAG_INFO_INPUT, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
+    models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionVariableTrueSkip(feature_set=['phi', 'eta', 'pt', 'm']+['tag']*TAG_INFO_INPUT, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
+elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP_WITH_BOTTLENECK":
+    models[model_n] = {'model' : DeepSetsWithResidualSelfAttentionVariableTrueSkipBottleneck(bottleneck_attention=ATTENTION_OUTPUT_BOTTLENECK_SIZE, feature_set=['phi', 'eta', 'pt', 'm']+['tag']*TAG_INFO_INPUT, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
 elif MODEL_ARCH=="SINGLE_SELFATTENTION":
     models[model_n] = {'model' : SingleSelfAttentionNet(layer_norm_input=model_cfg['layer_norm_input'], skip_connection=model_cfg['skip_connection'], hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], input_dim=4+int(TAG_INFO_INPUT), hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)}
 elif MODEL_ARCH=="DEEPSETS_RESIDUAL_VARIABLE":
@@ -1579,7 +1678,7 @@ num_epochs = 30
 log_interval = int(50e3/batch_size)
 # longer_log_interval = log_interval*10
 longer_log_interval = 100000000000
-SAVE_MODEL_EVERY = 1
+SAVE_MODEL_EVERY = 2
 name_mapping = {"DEEPSETS":"DS", 
                 "HYBRID_SELFATTENTION_GATED":"DSSAGA", 
                 "DEEPSETS_SELFATTENTION":"DSSA", 
@@ -1587,6 +1686,7 @@ name_mapping = {"DEEPSETS":"DS",
                 "DEEPSETS_SELFATTENTION_RESIDUAL_X2":"DSSAR2", 
                 "DEEPSETS_SELFATTENTION_RESIDUAL_X3":"DSSAR3", 
                 "DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP":f"DSSARVTS{num_blocks_variable}",
+                "DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP_WITH_BOTTLENECK":f"DSSARVTSBN{num_blocks_variable}",
                 "SINGLE_SELFATTENTION":f"SSA",
                 "DEEPSETS_RESIDUAL_VARIABLE":f"DSSARV{num_blocks_variable}",
                 "DEEPSETS_RESIDUAL_LONGCLASSIFIER":f"DSSAR_{num_blocks_variable}B_{num_clasifierlayers_variable}CL",
@@ -1596,8 +1696,8 @@ name_mapping = {"DEEPSETS":"DS",
                 "DEEPSETS_BASIC":f"DSB",
                 }
 config = {
-        "learning_rate": 1e-3,
-        "learning_rate_low": 1e-7,
+        "learning_rate": 3e-4,
+        "learning_rate_low": 5e-7,
         "learning_rate_log_decay":True,
         "architecture": "PhysicsTransformer",
         "dataset": "ATLAS_ChargedHiggs",
@@ -1623,7 +1723,11 @@ if 0: #
 
 
 # %%
-criterion = HEPLoss(is_categorical=IS_CATEGORICAL, apply_correlation_penalty=False, alpha=1.0, apply_valid_penalty=False, valid_penalty_weight=1.0)
+if not USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION:
+    criterion = HEPLoss(is_categorical=IS_CATEGORICAL, apply_correlation_penalty=False, alpha=1.0, apply_valid_penalty=False, valid_penalty_weight=1.0)
+else:
+    criterion = HEPLossWithEntropy(entropy_loss=True, entropy_weight=1e-3, target_entropy=np.log(2), is_categorical=IS_CATEGORICAL, apply_correlation_penalty=False, alpha=1.0, apply_valid_penalty=False, valid_penalty_weight=1.0)
+    # criterion = HEPLossWithEntropy(entropy_loss=True, entropy_weight=1e-3, target_entropy=0, is_categorical=IS_CATEGORICAL, apply_correlation_penalty=False, alpha=1.0, apply_valid_penalty=False, valid_penalty_weight=1.0)
 train_metrics = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
 val_metrics = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), total_weights_per_dsid=val_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000])
 train_metrics_MCWts = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
@@ -1633,6 +1737,7 @@ total_train_samples_processed = 0
 train_loader._reset_indices()
 orig_len_train_dataloader=len(train_loader)
 num_lr_steps = num_epochs*orig_len_train_dataloader
+from MechInterpUtils import run_with_cache_and_singleAttention, run_with_cache_and_bottleneck, run_with_cache_and_minAttention
 for epoch in range(num_epochs):
     # Update learning rate based on the cosine scheduler
     train_loader._reset_indices()
@@ -1648,7 +1753,7 @@ for epoch in range(num_epochs):
     sum_weights_epoch = 0
     for batch_idx in range(orig_len_train_dataloader):
         if ((batch_idx%10)==0):
-            new_lr = basic_lr_scheduler(batch_idx + epoch*orig_len_train_dataloader, config['learning_rate'], config['learning_rate_low'], num_lr_steps, config["learning_rate_log_decay"]) # Or in theory could use global step
+            new_lr = basic_lr_scheduler(batch_idx + epoch*orig_len_train_dataloader, config['learning_rate'], config['learning_rate_low'], num_lr_steps, config["learning_rate_log_decay"], warmup_steps=100, warmup_rate=3e-3) # Or in theory could use global step
             for param_group in optimizer.param_groups:
                 param_group['lr'] = new_lr
             if ((batch_idx%1000)==0):
@@ -1682,9 +1787,13 @@ for epoch in range(num_epochs):
             ]
             ).squeeze()
         else:
-            outputs = model(x[...,:4+int(TAG_INFO_INPUT)], types).squeeze()
+            # outputs, cache = run_with_cache_and_singleAttention(model, x[...,:4+int(TAG_INFO_INPUT)], types, detach=False)
+            # outputs, cache = run_with_cache_and_minAttention(model, x[...,:4+int(TAG_INFO_INPUT)], types, 0.5, detach=False)
+            outputs, cache = run_with_cache_and_bottleneck(model, x[...,:4+int(TAG_INFO_INPUT)], types, detach=False)
+            outputs = outputs.squeeze()
         # assert(False)
-        loss = criterion(outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], x[...,:4])
+        # loss = criterion(outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], cache, x[...,:4])
+        loss = criterion(cache, outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], x[...,:4])
         train_loss_epoch += loss.item() * w.sum().item()
         sum_weights_epoch += w.sum().item()
         
@@ -1756,8 +1865,13 @@ for epoch in range(num_epochs):
                 x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
                 # x, y, w, types, mqq, mlv, MCWts = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device), MCWts.to(device)
                 
-                outputs = model(x[...,:4+int(TAG_INFO_INPUT)], types).squeeze()
-                loss += criterion(outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], x[...,:4]).sum() * w.sum()
+                # outputs, cache = run_with_cache_and_singleAttention(model, x[...,:4+int(TAG_INFO_INPUT)], types, detach=False)
+                # outputs, cache = run_with_cache_and_minAttention(model, x[...,:4+int(TAG_INFO_INPUT)], types, 0.5, detach=False)
+                outputs, cache = run_with_cache_and_bottleneck(model, x[...,:4+int(TAG_INFO_INPUT)], types, detach=False)
+                outputs = outputs.squeeze()
+                
+                # loss += criterion(outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], cache, x[...,:4]).sum() * w.sum()
+                loss += criterion(cache, outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], x[...,:4]).sum() * w.sum()
                 wt_sum += w.sum()
                 val_metrics.update(outputs, x[...,-1], w, dsids, types)
                 val_metrics_MCWts.update(outputs, x[...,-1], MCWts, dsids, types)

@@ -192,16 +192,23 @@ def check_valid(types, inclusion, padding_token, categorical, returnTypes = Fals
 
 def check_category(types, #[batch object]
                    inclusion, # [batch object]
-                   padding_token # int
+                   padding_token, # int
+                   use_torch=False, # bool
                    ):
     num_in_H = {}
     num_in_W = {}
     assert(padding_token==5) # Only written this code for this; if ljets are split into 3=not-xbb, 5=xbb, then have to re-write this function
     particle_type_mapping = {0:'electron', 1:'muon', 2:'neutrino', 3:'ljet', 4:'sjet'}
-    category = np.ones(len(types), dtype=int)*-1
-    for ptype_idx in particle_type_mapping.keys():
-        num_in_H[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).astype(int) * (inclusion==1).astype(int))).sum(axis=-1)
-        num_in_W[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).astype(int) * (inclusion>1).astype(int))).sum(axis=-1)
+    if not use_torch:
+        category = np.ones(len(types), dtype=int)*-1
+        for ptype_idx in particle_type_mapping.keys():
+            num_in_H[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).astype(int) * (inclusion==1).astype(int))).sum(axis=-1)
+            num_in_W[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).astype(int) * (inclusion>1).astype(int))).sum(axis=-1)
+    else:
+        category = torch.ones(len(types), dtype=torch.int)*-1
+        for ptype_idx in particle_type_mapping.keys():
+            num_in_H[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).to(int) * (inclusion==1).to(int))).sum(dim=-1)
+            num_in_W[particle_type_mapping[ptype_idx]] = (((types == ptype_idx).to(int) * (inclusion>1).to(int))).sum(dim=-1)
     valid_H_sjet =   ((num_in_H['electron']==0) & (num_in_H['muon']==0) & (num_in_H['neutrino']==0) & (num_in_H['sjet']==2) & (num_in_H['ljet']==0))
     valid_H_ljet =   ((num_in_H['electron']==0) & (num_in_H['muon']==0) & (num_in_H['neutrino']==0) & (num_in_H['sjet']==0) & (num_in_H['ljet']==1)) 
     valid_W_lv = ((num_in_W['electron']==1) & (num_in_W['muon']==0) & (num_in_W['neutrino']==1) & (num_in_W['sjet']==0) & (num_in_W['ljet']==0)) | \
@@ -254,10 +261,13 @@ def multi_cosine_lr_scheduler(epoch: int, lrs:List[float], n_epochs: int):
         lr = lrs[-1]
     return lr
 
-def basic_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int, log=True):
+def basic_lr_scheduler(epoch: int, lr_high: float, lr_low: float, n_epochs: int, log=True, warmup_steps=None, warmup_rate=None):
     """
     This function calculates the learning rate following a flat decreasing schedule
     """
+    if (warmup_steps is not None) and (warmup_rate is not None):
+        if epoch<warmup_steps:
+            return warmup_rate
     if log:
         return lr_high * np.power((lr_low/lr_high), epoch/n_epochs)
     else:

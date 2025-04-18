@@ -92,14 +92,21 @@ def get_gradient_hook(cache: ActivationCache, name: str, detach=True):
             cache.store[name]["grad_output"] = [x.detach() if isinstance(x, torch.Tensor) and x is not None else x for x in grad_output]
     return hook_fn
 
-def hook_attention_heads(model, cache: ActivationCache, detach=True):
-    """Add hooks to extract attention patterns and outputs from each head."""
+def hook_attention_heads(model, cache: ActivationCache, detach=True, SINGLE_ATTENTION=False, min_attention=None, bottleneck_attention_output=None):
+    """Add hooks to extract attention patterns and outputs from each head.
+    SINGLE_ATTENTION is a flag to indicate if we want to force attention to a single (maximally activating) object and nothing else
+    bottleneck_attention_output is a variable to indicate if we want to force a bottleneck after the attention output. Value of None 
+    indicates no bottleneck, and an integer indicates the number of neurons in the bottleneck layer.
+    """
+    CHECKS_ON = False
+    assert((min_attention is None) or (SINGLE_ATTENTION is True))
+    assert((min_attention is not None) or (SINGLE_ATTENTION is False))
     hooks = []
     
     # Hook attention blocks
     for i, block in enumerate(model.attention_blocks):
         # Original MultiheadAttention's forward is complex, so we'll need to hook it specially
-        def get_attention_hook(block_idx, detach=True):  
+        def get_attention_hook(block_idx, detach=True, bottleneck_down=None, bottleneck_up=None):
             def hook_fn(module, inputs, kwargs, output):
                 # Extract q, k, v and attention weights (output is just attn_output)
                 # For nn.MultiheadAttention, output is (attn_output, attn_weights)
@@ -155,8 +162,22 @@ def hook_attention_heads(model, cache: ActivationCache, detach=True):
                         ) # After this line, shape is now: [batch*head object_query object_key]
                     else:
                         attn_weights_byhand = torch.bmm(q_scaled, k.transpose(-2, -1))
+
                     attn_weights_byhand = torch.nn.functional.softmax(attn_weights_byhand, dim=-1) # After this line, shape is now: [batch*head object_query object_key]
-                    if 1: # Little check
+                    if SINGLE_ATTENTION:
+                        if 0: # Actaully force single attention
+                            # We want to force the attention to the object with highest probability, so we find that and then set all other attention to 0
+                            # Find the object with highest attention
+                            max_idx = attn_weights_byhand.max(dim=-1) # Shape: [batch*head object_query]
+                            # Now set the attn_weights to be zeros except for max_index where it is 1
+                            attn_weights_byhand = torch.zeros_like(attn_weights_byhand)
+                            attn_weights_byhand.scatter_(-1, max_idx.indices.unsqueeze(-1), 1) # Shape: [batch*head object_query object_key]
+                        else: # Just mask anything which is attended less than 0.2. NOTE it works with 0.2 (ie trains okay) but not with 0.5 - this seems interesting! It seems like it needs to be able to look at more than one?
+                            # attn_weights_byhand = torch.where(attn_weights_byhand > 0.2, attn_weights_byhand, torch.zeros_like(attn_weights_byhand))
+                            # attn_weights_byhand = torch.where(attn_weights_byhand > 0.5, attn_weights_byhand, torch.zeros_like(attn_weights_byhand))
+                            attn_weights_byhand = torch.where(attn_weights_byhand > min_attention, attn_weights_byhand, torch.zeros_like(attn_weights_byhand))
+
+                    if CHECKS_ON and (not SINGLE_ATTENTION): # Little check
                         assert(torch.isclose(attn_weights_byhand.view(bsz, num_heads, tgt_len, src_len)[0,1,:,:], attn_weights[0,1,:,:], atol=1e-05).all()) # Check batch element 0, head 1, all queries/keys to make sure they match
 
                     attn_output_byhand = torch.bmm(attn_weights_byhand, v) # After this line, shape is now: [batch*head object_query dhead]
@@ -166,26 +187,56 @@ def hook_attention_heads(model, cache: ActivationCache, detach=True):
                     if 0: # Unnecessary, just for a check
                         attn_output_byhand_headcombined = torch.matmul(attn_output_byhand, module.out_proj.weight.transpose(0,1)) + module.out_proj.bias # After this line, shape is now: [object_query*batch dmodel] # NOTE that in multiplying by the outprojection, we have combined the heads in an inrreversible way
                         attn_output_byhand_headcombined = attn_output_byhand_headcombined.contiguous().view(tgt_len, bsz, -1).transpose(0,1) # After this line, shape is now: [batch object_query dmodel]
-                    attn_output_per_head = torch.empty((B, module.num_heads, N, module.out_proj.weight.shape[0]))
+                    attn_output_per_head = torch.empty((B, module.num_heads, N, module.out_proj.weight.shape[0])).to(module.out_proj.weight.device)
                     for head_n in range(num_heads):
                         W_rows = module.out_proj.weight.transpose(0,1)[head_n*head_dim:(head_n+1)*head_dim] # After this line, shape is now [d_head dmodel]
                         attnoutput_cols = attn_output_byhand[:, head_n*head_dim:(head_n+1)*head_dim] # After this line, shape is now [object_query*batch d_head]
                         head_output = torch.matmul(attnoutput_cols, W_rows) # After this line, shape is now: [object_query*batch dmodel] # NOTE that since we took the relevant slice of the W matrix rows and relevant slice of attn_output columns for this head, we have only projected this head onto dmodel
                         attn_output_per_head[:, head_n, :, :] = head_output.contiguous().view(tgt_len, bsz, -1).transpose(0,1) # After this line, shape is now: [batch object_query dmodel]
-                    if 1: # Just a quick test to check we got the output correctly
+                    if CHECKS_ON and (not SINGLE_ATTENTION) and (bottleneck_attention_output is None): # Just a quick test to check we got the output correctly
+                        # Have to skip this if bottleneck_attention_output is not None since we might have already wrapped it in the bottleneck with a previous hook.
                         recrafted_attn_output=(attn_output_per_head.sum(dim=1) + module.out_proj.bias)
                         assert(torch.isclose(recrafted_attn_output[0,:5,0],attn_output[0,:5,0], atol=1e-05).all())
                         # print(torch.isclose(b,attn_output).sum()/b.numel()) # 0.9934 of the elements pass isclose
+                    if bottleneck_attention_output is not None:
+                        bottlneck_activations = torch.empty((B, module.num_heads, N, bottleneck_attention_output)).to(module.out_proj.weight.device)
+                        assert ((bottleneck_up is not None) and (bottleneck_down is not None))
+                        for head_n in range(num_heads):
+                            # Get head-specific output [batch, seq_len, model_dim]
+                            head_out = attn_output_per_head[:, head_n, :, :]
+                            # Project down [batch*seq_len, model_dim] -> [batch*seq_len, bottleneck_dim]
+                            projected_down = torch.matmul(
+                                # head_out.view(-1, head_out.size(-1)), 
+                                head_out.contiguous().view(-1, head_out.size(-1)), 
+                                bottleneck_down[head_n].weight.t()
+                            )
+                            bottlneck_activations[:, head_n, :, :] = projected_down.view(head_out.size(0), head_out.size(1), -1)
+                            # Optional: Apply activation here (e.g., GELU)
+                            # projected_down = torch.nn.functional.gelu(projected_down)
+                            # Project back up [batch*seq_len, bottleneck_dim] -> [batch*seq_len, model_dim]
+                            projected_up = torch.matmul(
+                                projected_down, 
+                                bottleneck_up[head_n].weight.t()
+                            )
+                            # Reshape back to [batch, seq_len, model_dim]
+                            attn_output_per_head[:, head_n, :, :] = projected_up.view(head_out.size(0), head_out.size(1), -1)
                 if detach:
                     cache.store[f"block_{block_idx}_attention"]["attn_weights_per_head"] = attn_weights_byhand.view(bsz, num_heads, tgt_len, src_len).detach()
                     cache.store[f"block_{block_idx}_attention"]["attn_unprojected_output_per_head"] = attn_output_byhand.view(tgt_len, bsz, num_heads, head_dim).transpose(0,1).detach()
                     cache.store[f"block_{block_idx}_attention"]["attn_output_per_head"] = attn_output_per_head.detach()
+                    if bottleneck_attention_output is not None:
+                        cache.store[f"block_{block_idx}_attention"]["bottleneck_activation"] = bottlneck_activations.detach()
                 else:
                     # print("WARNING: Running cache with non-detached output - not sure how safe this is...")
                     cache.store[f"block_{block_idx}_attention"]["attn_weights_per_head"] = attn_weights_byhand.view(bsz, num_heads, tgt_len, src_len)
                     cache.store[f"block_{block_idx}_attention"]["attn_unprojected_output_per_head"] = attn_output_byhand.view(tgt_len, bsz, num_heads, head_dim).transpose(0,1)
                     cache.store[f"block_{block_idx}_attention"]["attn_output_per_head"] = attn_output_per_head
-                return output
+                    if bottleneck_attention_output is not None:
+                        cache.store[f"block_{block_idx}_attention"]["bottleneck_activation"] = bottlneck_activations
+                if SINGLE_ATTENTION or (bottleneck_attention_output is not None):
+                    return (attn_output_per_head.sum(dim=1) + module.out_proj.bias), attn_weights
+                else:
+                    return output
             return hook_fn
 
 
@@ -204,8 +255,10 @@ def hook_attention_heads(model, cache: ActivationCache, detach=True):
             pass
         else:
             assert(False) # Shouldn't get here
-
-        hooks.append((block['self_attention'], get_attention_hook(i, detach=detach)))
+        if bottleneck_attention_output is not None:
+            hooks.append((block['self_attention'], get_attention_hook(i, detach=detach, bottleneck_down=block.bottleneck_down, bottleneck_up=block.bottleneck_up)))
+        else:
+            hooks.append((block['self_attention'], get_attention_hook(i, detach=detach)))
 
 
         
@@ -237,7 +290,7 @@ def extract_all_activations(model, object_features, object_types, detach=True):
     ]
     
     # Add hooks for attention blocks
-    hooks.extend(hook_attention_heads(model, cache, detach=detach))
+    hooks.extend(hook_attention_heads(model, cache, detach=detach, SINGLE_ATTENTION=False, bottleneck_attention_output=model.bottleneck_attention))
     
     # Run the model with hooks
     output = run_with_hooks(
@@ -254,6 +307,106 @@ def extract_all_activations(model, object_features, object_types, detach=True):
         cache.store["output"] = output
     
     return cache
+
+
+def run_with_cache_and_singleAttention(model, object_features, object_types, detach=True):
+    """
+    Extract and return all important intermediate activations from the model.
+    """
+    cache = ActivationCache()
+    
+    # Create hooks for all components
+    hooks = [
+        (model.object_net, get_activation_hook(cache, "object_net", detach=detach)),
+        (model.type_embedding, get_activation_hook(cache, "type_embedding", detach=detach))
+    ]
+    
+    # Add hooks for attention blocks
+    hooks.extend(hook_attention_heads(model, cache, detach=detach, SINGLE_ATTENTION=True, min_attention=0.5, bottleneck_attention_output=model.bottleneck_attention))
+    
+    # Run the model with hooks
+    output = run_with_hooks(
+        model,
+        (object_features, object_types),
+        fwd_hooks=hooks
+    )
+    
+    # Add the output to the cache
+    if detach:
+        cache.store["output"] = output.detach()
+    else:
+        # print("WARNING: Running cache with non-detached output - not sure how safe this is...")
+        cache.store["output"] = output
+    
+    return output, cache
+
+
+
+def run_with_cache_and_minAttention(model, object_features, object_types, min_attention, detach=True):
+    """
+    Extract and return all important intermediate activations from the model.
+    """
+    cache = ActivationCache()
+    
+    # Create hooks for all components
+    hooks = [
+        (model.object_net, get_activation_hook(cache, "object_net", detach=detach)),
+        (model.type_embedding, get_activation_hook(cache, "type_embedding", detach=detach))
+    ]
+    
+    # Add hooks for attention blocks
+    hooks.extend(hook_attention_heads(model, cache, detach=detach, SINGLE_ATTENTION=True, min_attention=min_attention, bottleneck_attention_output=model.bottleneck_attention))
+    
+    # Run the model with hooks
+    output = run_with_hooks(
+        model,
+        (object_features, object_types),
+        fwd_hooks=hooks
+    )
+    
+    # Add the output to the cache
+    if detach:
+        cache.store["output"] = output.detach()
+    else:
+        # print("WARNING: Running cache with non-detached output - not sure how safe this is...")
+        cache.store["output"] = output
+    
+    return output, cache
+
+
+
+
+def run_with_cache_and_bottleneck(model, object_features, object_types, detach=True):
+    """
+    Extract and return all important intermediate activations from the model.
+    """
+    cache = ActivationCache()
+    
+    # Create hooks for all components
+    hooks = [
+        (model.object_net, get_activation_hook(cache, "object_net", detach=detach)),
+        (model.type_embedding, get_activation_hook(cache, "type_embedding", detach=detach))
+    ]
+    
+    # Add hooks for attention blocks
+    hooks.extend(hook_attention_heads(model, cache, detach=detach, SINGLE_ATTENTION=False, bottleneck_attention_output=model.bottleneck_attention))
+    
+    # Run the model with hooks
+    output = run_with_hooks(
+        model,
+        (object_features, object_types),
+        fwd_hooks=hooks
+    )
+    
+    # Add the output to the cache
+    if detach:
+        cache.store["output"] = output.detach()
+    else:
+        # print("WARNING: Running cache with non-detached output - not sure how safe this is...")
+        cache.store["output"] = output
+    
+    return output, cache
+
 
 def get_residual_stream(cache: ActivationCache):
     """
@@ -501,7 +654,8 @@ def analyze_object_type_attention(model, cache, object_types, padding_token, ret
     results = {}
     
     for block_idx in range(model.num_attention_blocks):
-        attn_weights = cache[f"block_{block_idx}_attention"]["attn_weights"]
+        # attn_weights = cache[f"block_{block_idx}_attention"]["attn_weights"]
+        attn_weights = cache[f"block_{block_idx}_attention"]["attn_weights_per_head"]
         
         # For each head, analyze attention patterns between object types
         num_heads = attn_weights.shape[1]
@@ -743,7 +897,7 @@ def angular_separation_detector(model, cache: ActivationCache, x, object_types, 
                 maxsize=20,
                 parsimony=0.01,
                 # procs=0.9,
-                ncyclesperiteration=500,
+                ncycles_per_iteration=500,
                 # verbosity=1,
                 random_state=0,
                 deterministic=True,
@@ -880,7 +1034,7 @@ def angular_separation_detector_split_by_type(model,
                         maxsize=20,
                         parsimony=0.01,
                         # procs=0.9,
-                        ncyclesperiteration=500,
+                        ncycles_per_iteration=500,
                         # verbosity=1,
                         verbosity=0,
                         random_state=0,
@@ -1493,15 +1647,19 @@ def regress_results(y, X, n_train=2000, labels=None):
         # Now try and predict with SR
         est_pysr = PySRRegressor(
             population_size=1000,
+            populations=31,
             niterations=50,
-            binary_operators=["+", "*", "^", "-"],
-            unary_operators=[],
-            constraints={'^': (-1, 1)},
+            binary_operators=["+", "*", "^", "-", "/"],
+            # unary_operators=["sqrt", "log", "sin", "cos"],
+            unary_operators=["sqrt", "log"],#, "sin", "cos"],
+            constraints={'^': (9, 1), "sqrt":10},
+            # nested_constraints={"sin": {"sin": 0, "cos": 0}, "cos": {"sin": 0, "cos": 0}},
             complexity_of_variables=2,
-            maxsize=40,
+            maxsize=30,
             parsimony=0.01,
             # procs=0.9,
-            ncyclesperiteration=500,
+            # ncycles_per_iteration=500,
+            ncycles_per_iteration=5000,
             verbosity=1,
             # verbosity=0,
             random_state=0,
@@ -1752,6 +1910,210 @@ def main_sae_analysis(model, data_loader, n_inputs, device='cuda', hidden_dim_sa
 
 
 
+
+
+
+
+def run_symb_analysis(layer_activations, layer_key, batch_data, true_labels=None):
+    """Run full SAE analysis for a specific layer's activations"""
+    print(f"\nAnalyzing layer: {layer_key}")
+    assert (len(layer_activations.shape)==2)
+    if true_labels is not None:
+        assert (len(true_labels)==len(layer_activations))
+    
+    
+    # Reshape activations if needed - assuming [batch, objects, features]
+    batch_size, n_features = layer_activations.shape
+    flattened_activations = layer_activations
+    
+    # Features already extracted from the model, so no need to train an autoencoder
+    encoded_features = layer_activations
+    
+    # Analyze features
+    feature_info = analyze_features(encoded_features)
+    
+    # Visualize if labels provided
+    if (true_labels is not None) and (encoded_features.shape[-1]>1):
+        # Repeat labels for each object
+        # repeated_labels = true_labels.unsqueeze(1).expand(-1, n_objects).reshape(-1)
+        repeated_labels = true_labels
+        plt = visualize_latent_space(encoded_features, repeated_labels)
+        plt.savefig(f"latent_space_{layer_key}_autoencoderDim{encoded_features.shape[-1]}.png")
+        plt.close()
+    
+    pysr_results = regress_results(encoded_features.detach().cpu().numpy(), batch_data.detach().cpu().numpy(), n_train=500)
+    
+    # Return the trained model and extracted features
+    return {
+        'features': encoded_features,
+        'feature_info': feature_info,
+        'symbolic_regression': pysr_results,
+    }
+
+
+def main_symbolic_regression(model, data_loader, n_inputs, device='cuda'):
+    """Main function to run symbolic regression analysis on selected layers"""
+    results = {}
+    
+    # Layers of interest (based on your DLA findings)
+    target_layers = [
+        # 'object_net', 
+        # ('block_0_attention', 'attn_output_per_head', 1),  # Example - replace with your layers of interest
+        # ('block_0_attention', 'attn_unprojected_output_per_head', 1),  # Example - replace with your layers of interest
+        # ('block_0_attention', 'bottleneck_activation', 0),  # Example - replace with your layers of interest
+        # ('block_0_attention', 'bottleneck_activation', 1),  # Example - replace with your layers of interest
+        ('block_0_attention', 'bottleneck_activation', 2),  # Example - replace with your layers of interest
+        # ('block_0_attention', 'bottleneck_activation', 3),  # Example - replace with your layers of interest
+        # 'block_1_post_attention',  # Example - replace with your layers of interest
+        # 'block_3_post_attention'
+    ]
+    print("WARNING: Hardcoded a bunch of stuff here")
+    target_query_objects = [2] # Objects which we're looking at the activations of
+    target_key_objects = [3] # Objects which we are taking the attention in relation to. If not attention layer, we'll ignore this. We'll take the pt, eta, phi, m, tagInfo of these variables and try to use symbolic regression to get a decent closed for expression for what the extracted feature is calculating
+    # target_key_objects = [2] # Objects which we think might be interesting in interpreting the activations. We'll take the pt, eta, phi, m, tagInfo of these variables and try to use symbolic regression to get a decent closed for expression for what the extracted feature is calculating
+    true_incl = [0,1,2,3] # Look at activations which are, in truth labelling, included in this particle. 3 is Wleptonic from H+, 2 is Whadronic from H+, 1 is SM Higgs from H+, 0 is none
+    # exclude_self = True # Whether to exclude self when 
+    # if exclude_self:
+    #     not_diag_mask = (~(torch.eye(object_types.shape[-1]).to(bool))).unsqueeze(0) # [1 query key]
+    # Run analysis for each target layer
+    for layer in target_layers:
+        N_TRAIN = 1000 # min training samples for the SAE
+        layer_activations = None
+        layer_truths = None
+        layer_potential_useful = None
+        num_activs = 0
+        data_loader._reset_indices()
+        total_batches = len(data_loader)
+        for batch_idx, batch in enumerate(data_loader):
+            print(f"Batch {batch_idx}/{total_batches}")
+            x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
+            x, types = x.to(device), types.to(device)
+            # Extract activations
+            cache = extract_all_activations(model, x[...,:n_inputs], types)
+            is_bottleneck=False # By default
+            if isinstance(layer, tuple):
+                if layer[1] == 'attn_output_per_head':
+                    is_attention=True
+                    layer_num = int(layer[0].split('_')[1][0])
+                    head_num = layer[2]
+                    activations = cache[layer[0]][layer[1]] # Shape [batch head object dmodel]
+                    # activations = einops.rearrange(activations, 'batch head object dmodel -> batch object head dmodel')
+                    activations = activations[:, layer[2], :, :] # Shape [batch object dmodel]
+                elif layer[1] == 'attn_unprojected_output_per_head':
+                    is_attention=True
+                    layer_num = int(layer[0].split('_')[1][0])
+                    head_num = layer[2]
+                    activations = cache[layer[0]][layer[1]] # Shape [batch object head dmodel]
+                    activations = activations[:, :, layer[2], :] # Shape [batch object dmodel]
+                elif layer[1] == 'bottleneck_activation':
+                    is_attention=True
+                    is_bottleneck=True
+                    activations = cache[layer[0]][layer[1]] # Shape [batch head object dbottleneck]
+                    activations = activations[:, layer[2], :, :] # Shape [batch object dbottleneck]
+                else:
+                    raise NotImplementedError
+            else:
+                if layer == 'object_net':
+                    activations = cache[layer]['output'] # shape [batch object dmodel]
+                    is_attention=False
+                else:
+                    raise NotImplementedError
+            # include_for_regression_mask = (torch.isin(types, torch.Tensor(target_key_objects))).to(device) # Shape [batch object]
+            mask = ((torch.isin(x[...,-1], torch.Tensor(true_incl))) & 
+                    (torch.isin(types, torch.Tensor(target_query_objects)))
+                    ).to(device) # shape [batch object]
+            if len(target_key_objects) and (is_attention): # Mask where the most interesting key-object is not of target type (since this is the one we'll include in our symbolic regression inputs)
+                attn = cache[layer[0]]['attn_weights_per_head'][:,layer[2]].detach() # Shape [batch seq_query seq_key]
+                attn_masked = attn * (~(torch.eye(types.shape[-1]).to(bool))).unsqueeze(0) # Mask itself, in case it's paying attention to itself (narcissistic mfs)
+                most_important_object_key = attn_masked.argmax(-1) # Shape [batch seq_query]
+                most_important_object_type = torch.gather(types, -1, most_important_object_key)
+                mask = mask & torch.isin(most_important_object_type, torch.tensor(target_key_objects))
+
+            # flat_include_for_regression_mask = einops.rearrange(include_for_regression_mask, 'batch object -> (batch object)')
+            flat_mask = einops.rearrange(mask, 'batch object -> (batch object)')
+            flat_truths = einops.rearrange(x[...,-1], 'batch object -> (batch object)')
+            flat_activs = einops.rearrange(activations, 'batch object dmodel -> (batch object) dmodel')
+
+            # Get potentially useful variables for regressing the extracted features using synmbolic regression
+            # Call the shape 'object_query' to mean the object which we are looking at the activation for, and object_key for any variable which might be useful in interpreting the activation
+            # For now, we will just take the object itself and the object to which it is paying most attention (if this is attention) or nothing (if this is not attention)
+            if is_attention:
+                # Will take itself, and the other object with most attention paid, as inputs for symbolic regression
+                attn = cache[layer[0]]['attn_weights_per_head'][:,layer[2]].detach() # Shape [batch seq_query seq_key]
+                attn_masked = attn * (~(torch.eye(types.shape[-1]).to(bool))).unsqueeze(0) # Mask itself, in case it's paying attention to itself (narcissistic mfs)
+                best_obj_idx_other_than_self = attn_masked.argmax(-1) # Shape [batch seq_query]
+                self_idx = einops.repeat(torch.arange(types.shape[-1]),'object -> batch object',batch=types.shape[0]) # Shape [batch seq_query]
+                self_xs = torch.gather(x, 1, einops.repeat(self_idx, 'batch object -> batch object variable', variable=x.shape[-1]))
+                other_xs = torch.gather(x, 1, einops.repeat(best_obj_idx_other_than_self, 'batch object -> batch object variable', variable=x.shape[-1]))
+                if n_inputs==5:
+                    potential_useful = torch.stack( 
+                        Get_PtEtaPhiM_fromXYZT(self_xs[...,0], self_xs[...,1], self_xs[...,2], self_xs[...,3], use_torch=True) + (self_xs[...,4],) +
+                        Get_PtEtaPhiM_fromXYZT(other_xs[...,0], other_xs[...,1], other_xs[...,2], other_xs[...,3], use_torch=True)  + (other_xs[...,4],),
+                        dim=-1
+                    ) # Should have shape [batch object_query 2*numvars] where numvars=5 here
+                elif n_inputs==4:
+                    potential_useful = torch.stack(
+                        Get_PtEtaPhiM_fromXYZT(self_xs[...,0], self_xs[...,1], self_xs[...,2], self_xs[...,3], use_torch=True) + 
+                        Get_PtEtaPhiM_fromXYZT(other_xs[...,0], other_xs[...,1], other_xs[...,2], other_xs[...,3], use_torch=True),
+                        dim=-1
+                    ) # Should have shape [batch object_query 2*numvars] where numvars=4 here
+                else:
+                    assert(False)
+                if is_bottleneck or is_attention: # Realised that for attention outputs, only the key object can be useful since we won't be computing anything from the query object...
+                    potential_useful = potential_useful[:, :, potential_useful.shape[-1]//2:]
+            else:
+                # Will take only itself as inputs for symbolic regression
+                self_idx = einops.repeat(torch.arange(types.shape[-1]),'object_query -> batch object_query',batch=types.shape[0]) # Shape [batch seq_query]
+                self_xs = torch.gather(x, 1, einops.repeat(self_idx, 'batch object_query -> batch object_query variable', variable=x.shape[-1]))
+                if n_inputs==5:
+                    potential_useful = torch.stack( 
+                            Get_PtEtaPhiM_fromXYZT(self_xs[...,0], self_xs[...,1], self_xs[...,2], self_xs[...,3], use_torch=True) + (self_xs[...,4],),
+                            dim=-1
+                        ) # Should have shape [batch object_query numvars] where numvars=5 here
+                elif n_inputs==4:
+                    potential_useful = torch.stack( 
+                            Get_PtEtaPhiM_fromXYZT(self_xs[...,0], self_xs[...,1], self_xs[...,2], self_xs[...,3], use_torch=True),
+                            dim=-1
+                        ) # Should have shape [batch object_query numvars] where numvars=5 here
+                else:
+                    assert(False)
+            
+            flat_potential_useful = einops.rearrange(potential_useful, 'batch object_query nvar -> (batch object_query) nvar') # After this line, shape [batch*object_query nvar] where nvar is (2 or 1)*(4 or 5) depending on whether it's attention or not and whether the tag info was included
+
+            masked_flat_activs = flat_activs[flat_mask] # shape [(batch object) dmodel]
+            masked_flat_truths = flat_truths[flat_mask] # shape [(batch object) 1]
+            masked_flat_potential_useful = flat_potential_useful[flat_mask] # shape [(batch object) nvar]
+            num_new_activs = min(N_TRAIN-num_activs, len(masked_flat_activs))
+            if num_new_activs>0:
+                print(f"Adding {num_new_activs} new activations")
+                if (layer_activations is None):
+                    layer_activations = torch.empty((N_TRAIN, masked_flat_activs.shape[1]))
+                    layer_truths = torch.empty((N_TRAIN,))
+                    layer_potential_useful = torch.empty((N_TRAIN, masked_flat_potential_useful.shape[1]))
+                layer_activations[num_activs:num_activs+num_new_activs] = masked_flat_activs[:num_new_activs]
+                layer_truths[num_activs:num_activs+num_new_activs] = masked_flat_truths[:num_new_activs]
+                layer_potential_useful[num_activs:num_activs+num_new_activs] = masked_flat_potential_useful[:num_new_activs]
+                num_activs += num_new_activs
+            if num_activs>=N_TRAIN:
+                break
+        assert(num_activs==N_TRAIN), "Finished looping through dataloader but not enough activations found!"
+        assert(N_TRAIN>=1000) # Min number for the regression; 500 train and 500 test
+        results[layer] = run_symb_analysis(layer_activations, layer, layer_potential_useful, layer_truths)
+        
+    
+    # # Interpret some interesting features
+    # for layer, layer_result in results.items():
+    #     autoencoder = layer_result['autoencoder']
+    #     input_dim = autoencoder.encoder.weight.shape[1]
+        
+    #     # Look at a few features (e.g., those with highest activation)
+    #     feature_activations = layer_result['features'].mean(dim=0)
+    #     top_features = torch.argsort(feature_activations, descending=True)[:5]
+        
+    #     for feature_idx in top_features:
+    #         interpret_features(autoencoder, feature_idx.item(), input_dim)
+    
+    return results
 
 
 
