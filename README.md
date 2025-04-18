@@ -3,9 +3,9 @@ Code for training, interpreting & applying transformer-like neural networks to l
 
 ## Main run files
 Note all of these are split into jupyter cell tags (esp. useful for mech interp script)
-To train a reconstruction network (on signal only), `python TrainLowLevelReconstruction.py`
-To train a classification network (for signal1 vs signal2 vs background), `python TrainLowLevelClassifier.py`
-To play around with some interpretability, `python RunLowLevelInterp.py`
+- To train a reconstruction network (on signal only), `python TrainLowLevelReconstruction.py`
+- To train a classification network (for signal1 vs signal2 vs background), `python TrainLowLevelClassifier.py`
+- To play around with some interpretability, `python RunLowLevelInterp.py`
 
 
 ## Other run files
