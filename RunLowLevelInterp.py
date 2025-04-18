@@ -1,5 +1,5 @@
 # %% # Load required modules
-import MechInterpUtils
+import mechinterputils
 import importlib 
 import numpy as np
 import os
@@ -12,7 +12,7 @@ from lowleveldataloader import ProportionalMemoryMappedDataset
 from torch import nn
 import matplotlib.pyplot as plt
 import shutil
-from MyMetricsLowLevelRecoTruthMatching import HEPMetrics
+from lowlevelrecometrics import HEPMetrics
 
 # %%
 timeStr = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -725,8 +725,8 @@ if 1: # Load a pre-trained model
             model = DeepSetsWithResidualSelfAttentionVariableTrueSkipBottleneck(bottleneck_attention=1, feature_set=['eta', 'phi', 'pt', 'm'] + ['tag']*(not EXCLUDE_TAG), use_lorentz_invariant_features=True, include_mlp=HAS_MLP, num_attention_blocks=3, hidden_dim=300, hidden_dim_mlp=1, num_heads=4, embedding_size=10, num_classes=3,  dropout_p=0.0).to(device)
             fwd_hooks = []
             hooks = []
-            dummy_cache = MechInterpUtils.ActivationCache()
-            fwd_hooks.extend(MechInterpUtils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=False, bottleneck_attention_output=model.bottleneck_attention))
+            dummy_cache = mechinterputils.ActivationCache()
+            fwd_hooks.extend(mechinterputils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=False, bottleneck_attention_output=model.bottleneck_attention))
             for module, hook_fn in fwd_hooks:
                 hooks.append(module.register_forward_hook(hook_fn, with_kwargs=True))
         elif 0: # Only use angles (no btag info, mass, pt)
@@ -736,8 +736,8 @@ if 1: # Load a pre-trained model
             model = DeepSetsWithResidualSelfAttentionVariableTrueSkipBottleneck(bottleneck_attention=1, feature_set=['eta', 'phi', 'pt', 'm'] + ['tag']*(not EXCLUDE_TAG), use_lorentz_invariant_features=True, include_mlp=HAS_MLP, num_attention_blocks=3, hidden_dim=300, hidden_dim_mlp=1, num_heads=4, embedding_size=10, num_classes=3,  dropout_p=0.0).to(device)
             fwd_hooks = []
             hooks = []
-            dummy_cache = MechInterpUtils.ActivationCache()
-            fwd_hooks.extend(MechInterpUtils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=True, min_attention=0.5, bottleneck_attention_output=model.bottleneck_attention))
+            dummy_cache = mechinterputils.ActivationCache()
+            fwd_hooks.extend(mechinterputils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=True, min_attention=0.5, bottleneck_attention_output=model.bottleneck_attention))
             for module, hook_fn in fwd_hooks:
                 hooks.append(module.register_forward_hook(hook_fn, with_kwargs=True))
         elif 0: # 
@@ -747,8 +747,8 @@ if 1: # Load a pre-trained model
             model = DeepSetsWithResidualSelfAttentionVariableTrueSkipBottleneck(bottleneck_attention=1, feature_set=['eta', 'phi', 'pt', 'm'] + ['tag']*(not EXCLUDE_TAG), use_lorentz_invariant_features=True, include_mlp=HAS_MLP, num_attention_blocks=3, hidden_dim=300, hidden_dim_mlp=1, num_heads=4, embedding_size=10, num_classes=3,  dropout_p=0.0).to(device)
             fwd_hooks = []
             hooks = []
-            dummy_cache = MechInterpUtils.ActivationCache()
-            fwd_hooks.extend(MechInterpUtils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=False, min_attention=None, bottleneck_attention_output=model.bottleneck_attention))
+            dummy_cache = mechinterputils.ActivationCache()
+            fwd_hooks.extend(mechinterputils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=False, min_attention=None, bottleneck_attention_output=model.bottleneck_attention))
             for module, hook_fn in fwd_hooks:
                 hooks.append(module.register_forward_hook(hook_fn, with_kwargs=True))
         elif 1: # ?Interesting to switch between ~chkpt4 and ~chkpt9 or so because it seems to have a step change in ability
@@ -760,8 +760,8 @@ if 1: # Load a pre-trained model
             model = DeepSetsWithResidualSelfAttentionVariableTrueSkipBottleneck(bottleneck_attention=1, feature_set=['eta', 'phi', 'pt', 'm'] + ['tag']*(not EXCLUDE_TAG), use_lorentz_invariant_features=True, include_mlp=HAS_MLP, num_attention_blocks=3, hidden_dim=300, hidden_dim_mlp=1, num_heads=4, embedding_size=10, num_classes=3,  dropout_p=0.0).to(device)
             fwd_hooks = []
             hooks = []
-            dummy_cache = MechInterpUtils.ActivationCache()
-            fwd_hooks.extend(MechInterpUtils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=False, min_attention=None, bottleneck_attention_output=model.bottleneck_attention))
+            dummy_cache = mechinterputils.ActivationCache()
+            fwd_hooks.extend(mechinterputils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=False, min_attention=None, bottleneck_attention_output=model.bottleneck_attention))
             for module, hook_fn in fwd_hooks:
                 hooks.append(module.register_forward_hook(hook_fn, with_kwargs=True))
     else:
@@ -786,7 +786,7 @@ if 1:
         batch = next(val_dataloader)
         x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
         outputs = model(x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
-        # outputs, cache = MechInterpUtils.run_with_cache_and_bottleneck(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+        # outputs, cache = mechinterputils.run_with_cache_and_bottleneck(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
         outputs = outputs.squeeze()
         val_metrics_MCWts.update(outputs, x[...,-1], MCWts, dsids, types)
 
@@ -811,8 +811,8 @@ if 0:
         batch = next(val_dataloader)
         x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
         # outputs = model(x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types).squeeze()
-        # cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
-        outputs, cache = MechInterpUtils.run_with_cache_and_singleAttention(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+        # cache = mechinterputils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+        outputs, cache = mechinterputils.run_with_cache_and_singleAttention(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
         outputs = outputs.squeeze()
         val_metrics_MCWts.update(outputs, x[...,-1], MCWts, dsids, types)
 
@@ -1003,21 +1003,21 @@ print(y.argmax(dim=-1)[:n])
 #     print(sjh2li)
 
 # %%
-importlib.reload(MechInterpUtils)
+importlib.reload(mechinterputils)
 
 COMBINE_LEPTONS_FOR_PLOTS=False
 with torch.no_grad():
     val_dataloader._reset_indices()
     batch = next(val_dataloader)
     x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
-    cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
-    residuals = MechInterpUtils.get_residual_stream(cache)
+    cache = mechinterputils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+    residuals = mechinterputils.get_residual_stream(cache)
 
-    dla=MechInterpUtils.old_direct_logit_attribution(model, cache)
-    ndla=MechInterpUtils.direct_logit_attribution(model, cache)
-    apa=MechInterpUtils.analyze_attention_patterns(cache,0)
-    ota=MechInterpUtils.analyze_object_type_attention(model, cache, types, padding_token, combine_elec_and_muon=COMBINE_LEPTONS_FOR_PLOTS)
-    ota_selfex=MechInterpUtils.analyze_object_type_attention(model, cache, types, padding_token, combine_elec_and_muon=COMBINE_LEPTONS_FOR_PLOTS, exclude_self=True)
+    dla=mechinterputils.old_direct_logit_attribution(model, cache)
+    ndla=mechinterputils.direct_logit_attribution(model, cache)
+    apa=mechinterputils.analyze_attention_patterns(cache,0)
+    ota=mechinterputils.analyze_object_type_attention(model, cache, types, padding_token, combine_elec_and_muon=COMBINE_LEPTONS_FOR_PLOTS)
+    ota_selfex=mechinterputils.analyze_object_type_attention(model, cache, types, padding_token, combine_elec_and_muon=COMBINE_LEPTONS_FOR_PLOTS, exclude_self=True)
 
 # %%
 from IPython.display import display
@@ -1027,9 +1027,9 @@ chosen_sample_index = 2
 val_dataloader._reset_indices()
 batch = next(val_dataloader)
 x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
-# cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
-# outputs, cache = MechInterpUtils.run_with_cache_and_singleAttention(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
-cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+# cache = mechinterputils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+# outputs, cache = mechinterputils.run_with_cache_and_singleAttention(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+cache = mechinterputils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
 for chosen_sample_index in range(10,20):
     print("-------------------------------------------------------------------------------------")
     print("-------------------------------------------------------------------------------------")
@@ -1120,7 +1120,7 @@ if 0: # Cell to show the attention output sizes (Loop over layer/head, absolute
     val_dataloader._reset_indices()
     batch = next(val_dataloader)
     x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
-    cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+    cache = mechinterputils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
     
     # First, the object net (direct from embedding) sizes...
     absolute_activations_bo = cache['object_net']['output'].abs().mean(dim=-1)
@@ -1184,7 +1184,7 @@ if 1:
     val_dataloader._reset_indices()
     batch = next(val_dataloader)
     x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
-    cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+    cache = mechinterputils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
     
     for direction in range(model.classifier[0].weight.shape[0]):
         print(f"Direction: {direction}")
@@ -1245,19 +1245,19 @@ if 1:
         print('------------------------------------------------------------------------------------------------------------------------------------')
 
 # %%
-MechInterpUtils.current_attn_detector(model, cache)
+mechinterputils.current_attn_detector(model, cache)
 
 # %%
 if 1:
     val_dataloader._reset_indices()
     batch = next(val_dataloader)
     x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
-    cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+    cache = mechinterputils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
 
-    importlib.reload(MechInterpUtils)
+    importlib.reload(mechinterputils)
     for direction in range(3):
         print(f"Direction: {direction}")
-        i=MechInterpUtils.likelyCandidate_attn_detector(model, cache, direction, padding_token=N_CTX-1)
+        i=mechinterputils.likelyCandidate_attn_detector(model, cache, direction, padding_token=N_CTX-1)
         print("")
         print("")
 
@@ -1267,53 +1267,42 @@ if 1:
         print(f"Direction: {direction}")
         for object_type in range(5):
             print(types_dict[object_type])
-            i=MechInterpUtils.likelyCandidate_attn_detector(model, cache, direction, padding_token=N_CTX-1, object_types_to_include=[object_type])
+            i=mechinterputils.likelyCandidate_attn_detector(model, cache, direction, padding_token=N_CTX-1, object_types_to_include=[object_type])
             print("")
         print("")
         print("")
 
 
 # %%
-importlib.reload(MechInterpUtils)
-# MechInterpUtils.angular_separation_detector(model, cache, x, types, padding_token)
+importlib.reload(mechinterputils)
+# mechinterputils.angular_separation_detector(model, cache, x, types, padding_token)
 if 0:
-    ah, scores = MechInterpUtils.angular_separation_detector_split_by_type(model, cache, x, types, padding_token, layers=[2], heads=[1], query_types=[0,1,2], key_types=[3])
+    ah, scores = mechinterputils.angular_separation_detector_split_by_type(model, cache, x, types, padding_token, layers=[2], heads=[1], query_types=[0,1,2], key_types=[3])
 elif 0:
-    ah, scores = MechInterpUtils.angular_separation_detector_split_by_type(model, cache, x, types, padding_token, layers=[2], heads=[1], query_types=[2], key_types=[0, 1])
+    ah, scores = mechinterputils.angular_separation_detector_split_by_type(model, cache, x, types, padding_token, layers=[2], heads=[1], query_types=[2], key_types=[0, 1])
 elif 0:
-    ah, scores = MechInterpUtils.angular_separation_detector_split_by_type(model, cache, x, types, padding_token, layers=None, heads=None, query_types=[2], key_types=[0, 1])
+    ah, scores = mechinterputils.angular_separation_detector_split_by_type(model, cache, x, types, padding_token, layers=None, heads=None, query_types=[2], key_types=[0, 1])
 
 # %%
 print("Really should add code to do the same for background samples here/incldue them in some calls, since they have truth_inclusion all set to zero so this skews the results")
 print("In reality, should probably move the cachce-getting intot he plot_logit_attributions function and have it loop until it gets a sufficient number of samples (to be specified)")
-importlib.reload(MechInterpUtils)
+importlib.reload(mechinterputils)
 with torch.no_grad():
     val_dataloader._reset_indices()
     batch = next(val_dataloader)
     x, y, _, types, _, _, _, _, _ = batch.values()
     x = x[y.argmax(dim=-1)>0]
     types = types[y.argmax(dim=-1)>0]
-    cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+    cache = mechinterputils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
 for obj_type in [0,1,2]:
-    # _=MechInterpUtils.plot_logit_attributions(model, cache, x[...,-1], types, [3], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2)", include_mlp=HAS_MLP, include_direct_from_embedding=True)
-    _=MechInterpUtils.plot_logit_attributions(model, cache, x[...,-1], types, [3], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2) [NO MLP]", include_mlp=False, include_direct_from_embedding=True)
-    _=MechInterpUtils.plot_logit_attributions(model, cache, x[...,-1], types, [3], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2) [WITH MLP]", include_mlp=True, include_direct_from_embedding=True)
+    # _=mechinterputils.plot_logit_attributions(model, cache, x[...,-1], types, [3], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2)", include_mlp=HAS_MLP, include_direct_from_embedding=True)
+    _=mechinterputils.plot_logit_attributions(model, cache, x[...,-1], types, [3], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2) [NO MLP]", include_mlp=False, include_direct_from_embedding=True)
+    _=mechinterputils.plot_logit_attributions(model, cache, x[...,-1], types, [3], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2) [WITH MLP]", include_mlp=True, include_direct_from_embedding=True)
 
 # %%
 
 for obj_type in [0,1,2]:
-    _=MechInterpUtils.plot_logit_attributionsMultiBatch(model, val_dataloader, N_Real_Vars-int(EXCLUDE_TAG), [3], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2)", include_mlp=HAS_MLP, include_direct_from_embedding=True, min_samples=100)#, dsid_incl=None)
-
-# %%
-with torch.no_grad():
-    val_dataloader._reset_indices()
-    batch = next(val_dataloader)
-    x, y, _, types, _, _, _, _, _ = batch.values()
-    x = x[y.argmax(dim=-1)>0]
-    types = types[y.argmax(dim=-1)>0]
-    cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
-for obj_type in [0,1,2]:
-    _=MechInterpUtils.plot_logit_attributions(model, cache, x[...,-1], types, [0], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to neither particle H+ decay product (class 0)", include_mlp=HAS_MLP)
+    _=mechinterputils.plot_logit_attributionsMultiBatch(model, val_dataloader, N_Real_Vars-int(EXCLUDE_TAG), [3], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2)", include_mlp=HAS_MLP, include_direct_from_embedding=True, min_samples=100)#, dsid_incl=None)
 
 # %%
 with torch.no_grad():
@@ -1322,14 +1311,25 @@ with torch.no_grad():
     x, y, _, types, _, _, _, _, _ = batch.values()
     x = x[y.argmax(dim=-1)>0]
     types = types[y.argmax(dim=-1)>0]
-    cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+    cache = mechinterputils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+for obj_type in [0,1,2]:
+    _=mechinterputils.plot_logit_attributions(model, cache, x[...,-1], types, [0], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to neither particle H+ decay product (class 0)", include_mlp=HAS_MLP)
+
+# %%
+with torch.no_grad():
+    val_dataloader._reset_indices()
+    batch = next(val_dataloader)
+    x, y, _, types, _, _, _, _, _ = batch.values()
+    x = x[y.argmax(dim=-1)>0]
+    types = types[y.argmax(dim=-1)>0]
+    cache = mechinterputils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
 truth_inclusion_mapping = {
     0:"neither particle",
     1:"SM Higgs",
     2:"W boson",
 }
 for true_incl in range(3):
-    _=MechInterpUtils.plot_logit_attributions(model, cache, x[...,-1], types, [true_incl], [3], title=f"Logit attribution for predicting reco large-R jets, truth-matched\nto be part of {truth_inclusion_mapping[true_incl]} (class {true_incl}) from H+", include_mlp=HAS_MLP)
+    _=mechinterputils.plot_logit_attributions(model, cache, x[...,-1], types, [true_incl], [3], title=f"Logit attribution for predicting reco large-R jets, truth-matched\nto be part of {truth_inclusion_mapping[true_incl]} (class {true_incl}) from H+", include_mlp=HAS_MLP)
 
 
 # %%
@@ -1339,22 +1339,22 @@ with torch.no_grad():
     x, y, _, types, _, _, _, _, _ = batch.values()
     x = x[y.argmax(dim=-1)>0]
     types = types[y.argmax(dim=-1)>0]
-    cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+    cache = mechinterputils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
 for true_incl in range(3):
-    _=MechInterpUtils.plot_logit_attributions(model, cache, x[...,-1], types, [true_incl], [4], title=f"Logit attribution for predicting reco small-R jets, truth-matched\nto be part of {truth_inclusion_mapping[true_incl]} (class {true_incl}) from H+", include_mlp=HAS_MLP)
+    _=mechinterputils.plot_logit_attributions(model, cache, x[...,-1], types, [true_incl], [4], title=f"Logit attribution for predicting reco small-R jets, truth-matched\nto be part of {truth_inclusion_mapping[true_incl]} (class {true_incl}) from H+", include_mlp=HAS_MLP)
 
 
 
 # %%
 # Observe the bits which tell a electron/muon/neutrino which comes from a W+ in a signal event where it comes from, for highest vs. lowest signal masses. Broadly the same pattern, but notice more info that it's NOT in the SM higgs comes from layer3-attentionhead0 in the higher mass case (though not usper interesting since it can never come from SM higgs in true signal, so it's never seen this in training).
 for obj_type in [0,1,2]:
-    _=MechInterpUtils.plot_logit_attributionsMultiBatch(model, val_dataloader, N_Real_Vars-int(EXCLUDE_TAG), [3], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2), dsid=510115", include_mlp=HAS_MLP, include_direct_from_embedding=True, dsid_incl=[510115], min_samples=100)
-    _=MechInterpUtils.plot_logit_attributionsMultiBatch(model, val_dataloader, N_Real_Vars-int(EXCLUDE_TAG), [3], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2), dsid=510124", include_mlp=HAS_MLP, include_direct_from_embedding=True, dsid_incl=[510124], min_samples=100)
+    _=mechinterputils.plot_logit_attributionsMultiBatch(model, val_dataloader, N_Real_Vars-int(EXCLUDE_TAG), [3], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2), dsid=510115", include_mlp=HAS_MLP, include_direct_from_embedding=True, dsid_incl=[510115], min_samples=100)
+    _=mechinterputils.plot_logit_attributionsMultiBatch(model, val_dataloader, N_Real_Vars-int(EXCLUDE_TAG), [3], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, truth-matched to W boson (class 2), dsid=510124", include_mlp=HAS_MLP, include_direct_from_embedding=True, dsid_incl=[510124], min_samples=100)
     
 # %%
 # Similar but now we observe the contributions from different components to the logits for class 0/1/2 in a electron/muon/neutrino which comes from nothing, for background ttbar sample
 for obj_type in [0,1,2]:
-    _=MechInterpUtils.plot_logit_attributionsMultiBatch(model, val_dataloader, N_Real_Vars-int(EXCLUDE_TAG), [0], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, ttbar events (so no truth matching)", include_mlp=HAS_MLP, include_direct_from_embedding=True, dsid_incl=[410470], min_samples=100)
+    _=mechinterputils.plot_logit_attributionsMultiBatch(model, val_dataloader, N_Real_Vars-int(EXCLUDE_TAG), [0], [obj_type], title=f"Logit attribution for predicting reco {reconstructed_object_types[obj_type]}s, ttbar events (so no truth matching)", include_mlp=HAS_MLP, include_direct_from_embedding=True, dsid_incl=[410470], min_samples=100)
 # %%
 # %%
 # %%
@@ -1366,7 +1366,7 @@ with torch.no_grad():
     val_dataloader._reset_indices()
     batch = next(val_dataloader)
     x, y, _, types, _, _, _, _, _ = batch.values()
-    cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+    cache = mechinterputils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
 val_dataloader.N_Real_Vars_To_Return
 model.object_net
 # %%
@@ -1394,27 +1394,27 @@ if 1: # Test what happens if we add random objects...
     
 
 
-    # cache = MechInterpUtils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+    # cache = mechinterputils.extract_all_activations(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
 
 # %%
 if 0: # Takes a while as it runs a lot of symbolic regression
-    importlib.reload(MechInterpUtils)
-    results = MechInterpUtils.main_sae_analysis(model, val_dataloader, N_Real_Vars, device=device, hidden_dim_sae=2)
+    importlib.reload(mechinterputils)
+    results = mechinterputils.main_sae_analysis(model, val_dataloader, N_Real_Vars, device=device, hidden_dim_sae=2)
 
 # %%
 if 1: # Takes a while as it runs a lot of symbolic regression
-    importlib.reload(MechInterpUtils)
-    results = MechInterpUtils.main_symbolic_regression(model, val_dataloader, N_Real_Vars-int(EXCLUDE_TAG), device=device)
+    importlib.reload(mechinterputils)
+    results = mechinterputils.main_symbolic_regression(model, val_dataloader, N_Real_Vars-int(EXCLUDE_TAG), device=device)
 
 # %%
 inverse_types_dict = {types_dict[type_key]:type_key for type_key in types_dict.keys()}
 block_num=0
 if 1: # Not using yet as currently can only look for eg. Pt, Eta, which we are already giving as inputs!
-    importlib.reload(MechInterpUtils)
+    importlib.reload(mechinterputils)
     for block_num in range(3):
         # for head in range(4):
         head=None
-        metrics = MechInterpUtils.learned_feature_probe(model, 
+        metrics = mechinterputils.learned_feature_probe(model, 
                             val_dataloader, 
                             N_Real_Vars, 
                             [2],
@@ -1443,17 +1443,17 @@ if 1: # Not using yet as currently can only look for eg. Pt, Eta, which we are a
 
 # %%
 if 0: # Doesn't currently seem to work & doesn't seem to plan to do much more than visualise the attention pattern
-    importlib.reload(MechInterpUtils)
-    flow_metrics = MechInterpUtils.track_information_flow(model, val_dataloader, N_Real_Vars)
-    MechInterpUtils.visualize_information_flow(flow_metrics, save_path='information_flow.png')
+    importlib.reload(mechinterputils)
+    flow_metrics = mechinterputils.track_information_flow(model, val_dataloader, N_Real_Vars)
+    mechinterputils.visualize_information_flow(flow_metrics, save_path='information_flow.png')
     # flow_metrics = track_information_flow(model, data_loader, n_inputs)
     # visualize_information_flow(flow_metrics, save_path='information_flow.png')
 
 # %%
 if 0: # Not tested yet, working out if the activation_maximization_for_attention_heads_KeepFixed version is better
-    importlib.reload(MechInterpUtils)
+    importlib.reload(mechinterputils)
     batch_idx = len(x)-1
-    MechInterpUtils.activation_maximization_for_attention_heads(model, x[batch_idx:batch_idx+1,:, :N_Real_Vars-int(EXCLUDE_TAG)], types[batch_idx:batch_idx+1,...], 0, 2, target_head=1)
+    mechinterputils.activation_maximization_for_attention_heads(model, x[batch_idx:batch_idx+1,:, :N_Real_Vars-int(EXCLUDE_TAG)], types[batch_idx:batch_idx+1,...], 0, 2, target_head=1)
 
 
 
@@ -1462,7 +1462,7 @@ if 0: # Not tested yet, working out if the activation_maximization_for_attention
 from utils import print_vars, print_inclusion
 if 1:
     # Start of the batch will be signal, end of the batch will be bkg
-    importlib.reload(MechInterpUtils)
+    importlib.reload(mechinterputils)
     batch_idx = len(x)-1
     batch_idx = 3
     val_dataloader._reset_indices()
@@ -1482,9 +1482,9 @@ if 1:
         iters=1000
         # iters=500
         # iters=50
-    maxed_in, scores, altered_scores, unaltered_scores = MechInterpUtils.activation_maximization_for_attention_heads_KeepFixed(model, initial_in, types[batch_idx:batch_idx+1,...], object_index_to_maximise, object_index_to_change, target_layer, target_head=target_head, maximise_direction=object_direction_to_change, lr=lr, iters=iters, print_every=100)
-    # maxed_in=MechInterpUtils.activation_maximization_for_attention_heads_KeepFixed(model, initial_in, types[:1,...], 1, 0, target_head=1, maximise_direction=2)
-    # maxed_in=MechInterpUtils.activation_maximization_for_attention_heads_KeepFixed(model, initial_in, types[:1,...], 0, 0, target_head=1,lr=3e-3,iters=2000)
+    maxed_in, scores, altered_scores, unaltered_scores = mechinterputils.activation_maximization_for_attention_heads_KeepFixed(model, initial_in, types[batch_idx:batch_idx+1,...], object_index_to_maximise, object_index_to_change, target_layer, target_head=target_head, maximise_direction=object_direction_to_change, lr=lr, iters=iters, print_every=100)
+    # maxed_in=mechinterputils.activation_maximization_for_attention_heads_KeepFixed(model, initial_in, types[:1,...], 1, 0, target_head=1, maximise_direction=2)
+    # maxed_in=mechinterputils.activation_maximization_for_attention_heads_KeepFixed(model, initial_in, types[:1,...], 0, 0, target_head=1,lr=3e-3,iters=2000)
     # print(initial_in)
     # print(maxed_in)
     # new_vars = torch.stack((*Get_PtEtaPhiM_fromXYZT(maxed_in[...,0],maxed_in[...,1],maxed_in[...,2],maxed_in[...,3],use_torch=True), maxed_in[...,4]),dim=-1)
@@ -1540,19 +1540,19 @@ for batch_idx in range(-10,-1):
 
 # %%
 if 0: # Now an ablation study
-    importlib.reload(MechInterpUtils)
+    importlib.reload(mechinterputils)
     val_dataloader._reset_indices()
     batch = next(val_dataloader)
     x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
     layer=0
     head=0
     interventions = [
-        (f'attention_blocks.{layer}.self_attention', lambda x: MechInterpUtils.ablate_attention_head(x, head_idx=0, num_heads=model.attention_blocks[0].self_attention.num_heads))
+        (f'attention_blocks.{layer}.self_attention', lambda x: mechinterputils.ablate_attention_head(x, head_idx=0, num_heads=model.attention_blocks[0].self_attention.num_heads))
     ]
 
     # Run the model with interventions
-    orig_output, orig_cache = MechInterpUtils.run_with_interventions(model, (x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types), [])
-    ablated_output, ablated_cache = MechInterpUtils.run_with_interventions(model, (x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types), interventions)
+    orig_output, orig_cache = mechinterputils.run_with_interventions(model, (x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types), [])
+    ablated_output, ablated_cache = mechinterputils.run_with_interventions(model, (x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types), interventions)
     batch_idx = 0
     print(orig_output[batch_idx, types[batch_idx]!=(N_CTX-1)])
     print(ablated_output[batch_idx, types[batch_idx]!=(N_CTX-1)])
@@ -1577,7 +1577,7 @@ def model_eval(model, dataloader, interventions, verbose=False):
             print(F"Processing batch {batch_idx}/{num_batches_to_process}")
         batch = next(dataloader)
         x, _, _, types, dsids, _, _, MCWts, _ = batch.values()
-        outputs, _ = MechInterpUtils.run_with_interventions(model, (x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types), interventions=interventions)
+        outputs, _ = mechinterputils.run_with_interventions(model, (x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types), interventions=interventions)
         metric_tracker.update(outputs, x[...,-1], MCWts, dsids, types)
 
     return metric_tracker.compute_and_log(1,'val', 0, 3, False, None, False, calc_all=True)
@@ -1588,7 +1588,7 @@ if 1: # Evaluate the model with different attention heads ablated
     for layer in range(len(model.attention_blocks)):
         for head in range(model.attention_blocks[0].self_attention.num_heads):
             interventions = [
-                (f'attention_blocks.{layer}.self_attention', lambda x: MechInterpUtils.ablate_attention_head(x, head_idx=head, num_heads=model.attention_blocks[0].self_attention.num_heads))
+                (f'attention_blocks.{layer}.self_attention', lambda x: mechinterputils.ablate_attention_head(x, head_idx=head, num_heads=model.attention_blocks[0].self_attention.num_heads))
             ]
             results_single_ablation[(layer, head)] = model_eval(model, val_dataloader, interventions)
             print(f"{layer}, {head}: lvbball={results_single_ablation[(layer, head)]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results_single_ablation[(layer, head)]['val/PerfectRecoPct_all_qqbb']:.4f}")
@@ -1648,8 +1648,8 @@ if 1: # Evaluate the model with different PAIRS OF attention heads ablated
             for layer2 in range(layer, len(model.attention_blocks)):
                 for head2 in range(int(layer2==layer)*(head+1), model.attention_blocks[0].self_attention.num_heads):
                     interventions = [
-                        (f'attention_blocks.{layer}.self_attention', lambda x: MechInterpUtils.ablate_attention_head(x, head_idx=head, num_heads=model.attention_blocks[0].self_attention.num_heads)),
-                        (f'attention_blocks.{layer2}.self_attention', lambda x: MechInterpUtils.ablate_attention_head(x, head_idx=head2, num_heads=model.attention_blocks[0].self_attention.num_heads)),
+                        (f'attention_blocks.{layer}.self_attention', lambda x: mechinterputils.ablate_attention_head(x, head_idx=head, num_heads=model.attention_blocks[0].self_attention.num_heads)),
+                        (f'attention_blocks.{layer2}.self_attention', lambda x: mechinterputils.ablate_attention_head(x, head_idx=head2, num_heads=model.attention_blocks[0].self_attention.num_heads)),
                     ]
                     results_pairs[f'{layer},{head}  {layer2},{head2}'] = model_eval(model, val_dataloader, interventions)
                     print(f"{layer},{head},  {layer2},{head2}: lvbball={results_pairs[f'{layer},{head}  {layer2},{head2}']['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results_pairs[f'{layer},{head}  {layer2},{head2}']['val/PerfectRecoPct_all_qqbb']:.4f}")
@@ -1707,7 +1707,7 @@ if 1: # Evaluate the model with different FULL LAYERS of attention heads removed
     results_layers['no ablation']=rv
     for layer in range(len(model.attention_blocks)):
         interventions = [
-            (f'attention_blocks.{layer}.self_attention', lambda x, h=h: MechInterpUtils.ablate_attention_head(x, head_idx=h, num_heads=model.attention_blocks[0].self_attention.num_heads)) for h in range(model.attention_blocks[0].self_attention.num_heads)
+            (f'attention_blocks.{layer}.self_attention', lambda x, h=h: mechinterputils.ablate_attention_head(x, head_idx=h, num_heads=model.attention_blocks[0].self_attention.num_heads)) for h in range(model.attention_blocks[0].self_attention.num_heads)
         ]
         results_layers[layer] = model_eval(model, val_dataloader, interventions)
         print(f"Layer {layer}: lvbball={results_layers[layer]['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results_layers[layer]['val/PerfectRecoPct_all_qqbb']:.4f}")
@@ -1720,8 +1720,8 @@ if 1: # Evaluate the model with ALL the attention heads removed
     results_all_removed = {}
     results_all_removed['no ablation']=rv
     interventions = []
-    interventions+= [(f'attention_blocks.{0}.self_attention', lambda x, h=h: MechInterpUtils.ablate_attention_head(x, head_idx=h, num_heads=model.attention_blocks[0].self_attention.num_heads)) for h in range(model.attention_blocks[0].self_attention.num_heads)]
-    interventions+= [(f'attention_blocks.{1}.self_attention', lambda x, h=h: MechInterpUtils.ablate_attention_head(x, head_idx=h, num_heads=model.attention_blocks[0].self_attention.num_heads)) for h in range(model.attention_blocks[0].self_attention.num_heads)]
+    interventions+= [(f'attention_blocks.{0}.self_attention', lambda x, h=h: mechinterputils.ablate_attention_head(x, head_idx=h, num_heads=model.attention_blocks[0].self_attention.num_heads)) for h in range(model.attention_blocks[0].self_attention.num_heads)]
+    interventions+= [(f'attention_blocks.{1}.self_attention', lambda x, h=h: mechinterputils.ablate_attention_head(x, head_idx=h, num_heads=model.attention_blocks[0].self_attention.num_heads)) for h in range(model.attention_blocks[0].self_attention.num_heads)]
     results_all_removed['All attn ablated'] = model_eval(model, val_dataloader, interventions)
     print(f"All ablated: lvbball={results_all_removed['All attn ablated']['val/PerfectRecoPct_all_lvbb']:.4f} qqbball={results_all_removed['All attn ablated']['val/PerfectRecoPct_all_qqbb']:.4f}")
 
