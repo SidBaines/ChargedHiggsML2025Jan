@@ -8,7 +8,7 @@ ts = []
 ts.append(time.time())
 
 import numpy as np
-from mydataloader import read_file
+from utils import read_file
 import os
 import torch
 from datetime import datetime

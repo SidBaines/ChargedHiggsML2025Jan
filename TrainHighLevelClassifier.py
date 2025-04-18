@@ -16,7 +16,7 @@ import matplotlib.pyplot as plt
 import matplotlib as mpl
 mpl.use('Agg') # If you want to run in batch mode, and not see the plots made
 from utils import decode_y_eval_to_info
-from mynewdataloaderHighLevel import ProportionalMemoryMappedDatasetHighLevel
+from highleveldataloader import ProportionalMemoryMappedDatasetHighLevel
 from transformer_lens import HookedTransformer, HookedTransformerConfig
 from transformer_lens.hook_points import HookPoint
 from jaxtyping import Float, Int

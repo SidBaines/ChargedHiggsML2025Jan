@@ -9,7 +9,7 @@ ts = []
 ts.append(time.time())
 
 import numpy as np
-from mydataloader import read_file
+from utils import read_file
 import os
 import torch
 from datetime import datetime
@@ -113,7 +113,7 @@ def process_single_file(filepath, target_channel):
             #qqbb neural net inputs
             'deltaR_LH','deltaPhi_HWhad','deltaEta_HWhad','ratio_Hpt_mVH_qqbb','ratio_Wpt_mVH_qqbb','deltaR_LWhad','LepEnergyFracHad',
             ]
-    from mydataloader import read_file
+    from utils import read_file
     _, x_event, y = read_file(filepath, 
                                 particle_features=[],
                                 event_level_features=event_level_features,

@@ -8,7 +8,7 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 # mpl.use('Agg')
-from mynewdataloader import ProportionalMemoryMappedDataset
+from lowleveldataloader import ProportionalMemoryMappedDataset
 from torch import nn
 import matplotlib.pyplot as plt
 import shutil

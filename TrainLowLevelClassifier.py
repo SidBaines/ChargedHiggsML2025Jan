@@ -17,7 +17,7 @@ import matplotlib as mpl
 # mpl.use('Agg')
 # from utils import save_current_script#, decode_y_eval_to_info
 from utils import decode_y_eval_to_info
-from mynewdataloader import ProportionalMemoryMappedDataset
+from lowleveldataloader import ProportionalMemoryMappedDataset
 from transformer_lens import HookedTransformer, HookedTransformerConfig
 from transformer_lens.hook_points import HookPoint
 from jaxtyping import Float, Int
