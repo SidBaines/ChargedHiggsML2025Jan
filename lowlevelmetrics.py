@@ -5,6 +5,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 from sklearn.metrics import roc_curve
 from utils import weighted_correlation
+import einops
 
 def init_wandb(config):
     wandb.init(
@@ -111,7 +112,7 @@ class HEPMetrics:
             self.processed_weight_sums_per_dsid[d.item()] += weights[dsid == d].sum().item()
         self.current_update_point += n_batch
 
-    def compute_and_log(self, epoch, prefix="val", step=None, log_level=0, save=True, commit=None):
+    def compute_and_log(self, epoch, prefix="val", step=None, log_level=0, save=True, commit=None, verbose=True, calc_all=False):
         # print("Accuracy calculated: ", self.accuracy.compute())
         if log_level > -1:
             accuracies = self.compute_accuracy()
@@ -138,7 +139,7 @@ class HEPMetrics:
             self.starts['sig_sel'] = self.current_update_point
         if save:
             wandb.log({**metrics, "epoch": epoch, "step":step}, commit=commit)
-        else:
+        elif verbose:
             print(metrics)
         return metrics
     
@@ -344,15 +345,19 @@ print(cum_weights3[np.searchsorted(cum_weights3, max_bkg_level)])
 
 # Modified loss class with wandb logging
 class HEPLoss(torch.nn.Module):
-    def __init__(self, weight_by_mH=False, alpha=1.0, target_mass=125, apply_correlation_penalty=False):
+    def __init__(self, padding_token, weight_by_mH=False, alpha=1.0, target_mass=125, apply_correlation_penalty=False, calc_entropy_loss=True, use_entropy_loss=False, entropy_weight=1e-3):
         super().__init__()
+        self.padding_token = padding_token
         self.ce = torch.nn.CrossEntropyLoss(reduction='none')
         self.weight_by_mH = weight_by_mH
         self.alpha = alpha
         self.target_mass = target_mass
         self.apply_correlation_penalty = apply_correlation_penalty
+        self.entropy_weight = entropy_weight
+        self.calc_entropy_loss = calc_entropy_loss
+        self.use_entropy_loss = use_entropy_loss
         
-    def forward(self, inputs, targets, weights, log, masses_qq, masses_lv, mHs):
+    def forward(self, inputs, targets, weights, log, masses_qq, masses_lv, mHs, cache=None):
         if self.weight_by_mH:
             weights *= self.scale_loss_by_mH(mHs)
         
@@ -362,7 +367,25 @@ class HEPLoss(torch.nn.Module):
         # correlation_loss = 1 - self.alpha * weighted_correlation(1-inputs[bkg,0], (inputs[bkg,1]>inputs[bkg,2])*masses_lv[bkg] + (inputs[bkg,1]<=inputs[bkg,2])*masses_qq[bkg], weights[bkg]) ** 2
         correlation_loss = weighted_correlation(1-inputs[bkg,0], (inputs[bkg,1]>inputs[bkg,2])*masses_lv[bkg] + (inputs[bkg,1]<=inputs[bkg,2])*masses_qq[bkg], weights[bkg]) ** 2
 
-        
+        total_entropy_loss = torch.tensor(0.0, device=inputs.device)
+        if self.calc_entropy_loss:
+            assert(cache is not None), "You are trying to calcuate the entropy loss which requires the activation cache"
+            total_heads = 0
+            eps=1e-8
+            entropy_losses = {}
+            for layer in range(len([k for k in cache.store.keys() if (('attention' in k) and (not 'post' in k))])):
+                entropy_losses[layer] = {}
+                for head in range(cache.store[f'block_{layer}_attention']['attn_weights_per_head'].shape[1]):
+                    attn_wts = (cache[f'block_{layer}_attention']['attn_weights_per_head'][:,head,...]) # Shape [batch object_query object_key]
+                    # Calculate the entropy along the last dimension (note, the padding should have been handled already so they should be 0)
+                    entropy_l = - (attn_wts * (attn_wts + eps).log()).sum(dim=-1)
+                    # entropy_l = (entropy_l - self.target_entropy).abs()
+                    entropy_losses[layer][head] = einops.einsum(entropy_l * (cache.store['type_embedding']['input'][0]!=self.padding_token), 'batch object -> batch') / einops.einsum(cache.store['type_embedding']['input'][0]!=self.padding_token, 'batch object -> batch')
+                    # total_entropy_loss += (entropy_losses[layer][head] * weights).sum() / weights.sum()
+                    total_entropy_loss += (entropy_losses[layer][head]).mean()
+                    total_heads += 1
+
+
         # Mass regularization
         # qq_mass_loss = (masses_qq[targets==2] - self.target_mass).pow(2).mean()
         # lv_mass_loss = (masses_lv[targets==1] - self.target_mass).pow(2).mean()
@@ -373,12 +396,16 @@ class HEPLoss(torch.nn.Module):
         else:
             total_loss = (ce_loss.sum())/(weights.sum())
         
+        if self.use_entropy_loss:
+            total_loss += self.entropy_weight * (total_entropy_loss/total_heads)
+        
         # Log individual loss components
         if log:
             wandb.log({
                 "loss/total": (ce_loss.sum())/(weights.sum()).item(),
                 "loss/total_withCorrelation": (total_loss + self.alpha * correlation_loss).item(),
                 "loss/correlation": correlation_loss.item(),
+                "loss/entropy": total_entropy_loss.item(),
                 # "loss/lv_mass": lv_mass_loss.item()
             }, commit=False)
         

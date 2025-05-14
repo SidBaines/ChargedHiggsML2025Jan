@@ -13,6 +13,7 @@ from torch import nn
 import matplotlib.pyplot as plt
 import shutil
 from lowlevelrecometrics import HEPMetrics
+from models import TestNetwork
 
 # %%
 timeStr = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -751,7 +752,7 @@ if 1: # Load a pre-trained model
             fwd_hooks.extend(mechinterputils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=False, min_attention=None, bottleneck_attention_output=model.bottleneck_attention))
             for module, hook_fn in fwd_hooks:
                 hooks.append(module.register_forward_hook(hook_fn, with_kwargs=True))
-        elif 1: # ?Interesting to switch between ~chkpt4 and ~chkpt9 or so because it seems to have a step change in ability
+        elif 0: # ?Interesting to switch between ~chkpt4 and ~chkpt9 or so because it seems to have a step change in ability
             # modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250414-221359_TrainingOutput/models/Nplits2_ValIdx0/chkpt4_27415.pth"
             modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250414-221359_TrainingOutput/models/Nplits2_ValIdx0/chkpt10_60313.pth"
             # modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250414-221359_TrainingOutput/models/Nplits2_ValIdx0/chkpt17_98694.pth"
@@ -764,6 +765,11 @@ if 1: # Load a pre-trained model
             fwd_hooks.extend(mechinterputils.hook_attention_heads(model, dummy_cache, detach=True, SINGLE_ATTENTION=False, min_attention=None, bottleneck_attention_output=model.bottleneck_attention))
             for module, hook_fn in fwd_hooks:
                 hooks.append(module.register_forward_hook(hook_fn, with_kwargs=True))
+        elif 1: # Test with low dimensionality network
+            modelfile="/users/baines/Code/ChargedHiggs_ExperimentalML/output/20250429-104046_TrainingOutput/models/Nplits2_ValIdx0/chkpt19_109660.pth"
+            TAG_INFO_INPUT=True
+            HAS_MLP = False
+            model = TestNetwork(hidden_dim_attn=2, hidden_dim=100, feature_set=['phi', 'eta', 'pt', 'm']+['tag']*TAG_INFO_INPUT, bottleneck_attention=None, include_mlp=HAS_MLP, num_attention_blocks=4, hidden_dim_mlp=1, num_heads=2, embedding_size=10, num_classes=3, use_lorentz_invariant_features=True, dropout_p=0.0, num_particle_types=N_CTX).to(device)
     else:
         assert(False)
     loaded_state_dict = torch.load(modelfile, map_location=torch.device(device))
@@ -778,7 +784,7 @@ if 1:
     val_dataloader._reset_indices()
     val_metrics_MCWts.reset()
     model.eval()
-    num_batches_to_process = int(30000 * (1/batch_size))
+    num_batches_to_process = int(300000 * (1/batch_size))
     # num_batches_to_process = len(val_dataloader)
     for batch_idx in range(num_batches_to_process):
         if ((batch_idx%10)==9):
@@ -786,11 +792,26 @@ if 1:
         batch = next(val_dataloader)
         x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
         outputs = model(x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+        if 0: # See what it's like if we randomly guess
+            outputs = torch.rand(x.shape[0], x.shape[1], 3)
         # outputs, cache = mechinterputils.run_with_cache_and_bottleneck(model, x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
         outputs = outputs.squeeze()
         val_metrics_MCWts.update(outputs, x[...,-1], MCWts, dsids, types)
 
 rv=val_metrics_MCWts.compute_and_log(1,'val', 0, 3, False, None, calc_all=True)
+
+
+# %%
+for k in rv.keys():
+    if 'tRecoPct_all_cat' in k:
+        print(f"{k:20s}: {rv[k]:.4f}")
+# category[valid_H_sjet & valid_W_sjet]   = 0
+# category[valid_H_sjet & valid_W_lv]     = 1
+# category[valid_H_sjet & valid_W_ljet]   = 2
+# category[valid_H_ljet & valid_W_sjet]   = 3
+# category[valid_H_ljet & valid_W_lv]     = 4
+# category[valid_H_ljet & valid_W_ljet]   = 5
+
 
 
 # %%
@@ -1063,8 +1084,8 @@ for chosen_sample_index in range(10,20):
 
 # %%
 if 1: # See how many of the attention weights are far from 1.0 or 0.0
-    for layer in range(3):
-        for head in range(4):
+    for layer in range(len(model.attention_blocks)):
+        for head in range(model.attention_blocks[0].self_attention.num_heads):
             for sample_idx in range(10):
                 print(f"{cache[f'block_{layer}_attention']['attn_weights_per_head'][sample_idx, head][cache[f'block_{layer}_attention']['attn_weights_per_head'][sample_idx,head]<0.9].max().item():.2e}", end="   ")
             print()

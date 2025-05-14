@@ -518,7 +518,7 @@ def old_direct_logit_attribution(model, cache, class_idx=None, top_k=5):
     }
 
 
-def direct_logit_attribution(model, cache, class_idx=None, top_k=5):
+def direct_logit_attribution(model, cache, class_idx=None, top_k=5, is_reconstruction=True):
     """
     Perform direct logit attribution to identify which components contribute most to classification.
     
@@ -532,7 +532,10 @@ def direct_logit_attribution(model, cache, class_idx=None, top_k=5):
         Dict of attribution scores by component
     """
     logits = cache["output"]
-    batch_size, num_objects, num_classes = logits.shape
+    if is_reconstruction:
+        batch_size, num_objects, num_classes = logits.shape
+    else:
+        batch_size, num_classes = logits.shape
     
     attributions = {}
     
@@ -540,7 +543,10 @@ def direct_logit_attribution(model, cache, class_idx=None, top_k=5):
     if class_idx is None:
         class_idx = logits.argmax(dim=-1)
     elif isinstance(class_idx, int):
-        class_idx = torch.full((batch_size, num_objects), class_idx, device=logits.device)
+        if is_reconstruction:
+            class_idx = torch.full((batch_size, num_objects), class_idx, device=logits.device)
+        else:
+            class_idx = torch.full((batch_size, ), class_idx, device=logits.device)
     
     # Compute attributions for each attention block
     for i in range(model.num_attention_blocks):
@@ -549,7 +555,14 @@ def direct_logit_attribution(model, cache, class_idx=None, top_k=5):
         attn_output = cache[f"block_{i}_attention"]["attn_output_per_head"]
         
         # Get the classifier weights for the specified class
-        classifier_weights = model.classifier[0].weight[class_idx]  # shape: [batch, obj, hidden_dim]
+        if ('output_projection' in model.attention_blocks[i]):
+            model.attention_blocks[i]
+            if is_reconstruction:
+                classifier_weights = einops.einsum(model.classifier[0].weight[class_idx], model.attention_blocks[i].output_projection.weight, 'batch obj hidden_dim, hidden_dim attn_dim -> attn_dim')  # shape: [batch obj hidden_dim]
+            else:
+                classifier_weights = einops.einsum(model.classifier[0].weight[class_idx], model.attention_blocks[i].output_projection.weight, 'batch hidden_dim, hidden_dim attn_dim -> attn_dim')  # shape: [batch hidden_dim]
+        else:
+            classifier_weights = model.classifier[0].weight[class_idx]  # shape: [batch, obj, hidden_dim] or [batch, hidden_dim]
         
         # Calculate attribution per attention head
         num_heads = attn_weights.shape[1]
@@ -570,8 +583,11 @@ def direct_logit_attribution(model, cache, class_idx=None, top_k=5):
     # Aggregate attributions across batches for analysis
     aggregated = {}
     for key, attr in attributions.items():
-        # Average across batch and objects
-        aggregated[key] = attr.mean(dim=(1, 2)).cpu().numpy()
+        # Average across batch (and objects if reconstruction)
+        if is_reconstruction:
+            aggregated[key] = attr.mean(dim=(1, 2)).cpu().numpy()
+        else:
+            aggregated[key] = attr.mean(dim=(1, 2)).cpu().numpy()
     
     # Find top contributors
     all_attrs = []
@@ -1077,6 +1093,7 @@ def get_direct_logit_attribution(model, # The model to test
                                  class_idx,
                                  include_mlp=True,
                                  include_direct_from_embedding=True,
+                                 is_reconstruction=True,
                                 ):
     """
     Perform direct logit attribution to identify which components contribute most to classification.
@@ -1091,21 +1108,36 @@ def get_direct_logit_attribution(model, # The model to test
         Dict of attribution scores by component
     """
     logits = cache["output"]
-    batch_size, num_objects, num_classes = logits.shape
+    if is_reconstruction:
+        batch_size, num_objects, num_classes = logits.shape
+    else:
+        batch_size, num_classes = logits.shape
     
     attributions = {}
-
-    mask = ((torch.isin(truth_inclusion, torch.Tensor(true_incl))) & 
+    if is_reconstruction:
+        mask = ((torch.isin(truth_inclusion, torch.Tensor(true_incl))) & 
+            (torch.isin(object_types, torch.Tensor(type_incl)))
+            ).to(logits.device)
+    else:
+        mask = ((torch.isin(einops.repeat(truth_inclusion, 'batch -> batch objects', objects=object_types.shape[1]), torch.Tensor(true_incl))) & 
             (torch.isin(object_types, torch.Tensor(type_incl)))
             ).to(logits.device)
 
-    class_idx = torch.full((batch_size, num_objects), class_idx, device=logits.device)
+
+    if is_reconstruction:
+        pass
+    else:
+        total_logits = logits[:, class_idx]
+    
     # Get the classifier weights for the specified class
-    classifier_weights = model.classifier[0].weight[class_idx]  # shape: [batch, object, hidden_dim]
+    if is_reconstruction:
+        classifier_weights = model.classifier[0].weight[class_idx]  # shape: [batch, object, hidden_dim]
+    else:
+        classifier_weights = model.classifier[0].weight[class_idx] # shape: [batch hidden_dim]
 
     if include_direct_from_embedding:
         # Compute attention for directly encoded/decoded
-        attributions["object_net"] = einops.einsum(cache['object_net']['output'], classifier_weights, 'batch object dmod, batch object dmod -> batch object')
+        attributions["object_net"] = einops.einsum(cache['object_net']['output'], classifier_weights, 'batch object dmod, dmod -> batch object')
 
     # Compute attributions for each attention block
     for i in range(model.num_attention_blocks):
@@ -1141,7 +1173,11 @@ def get_direct_logit_attribution(model, # The model to test
             head_attributions = []
             for h in range(num_heads): # Calculate attribution per attention head
                 # Extract this head's contribution & calculate attribution (dot product with classifier weights)
-                head_attribution = torch.sum(attn_output[:, h, :, :] * classifier_weights, dim=-1)
+                if 'output_projection' in model.attention_blocks[i]: # Have to do the head-local projection BACK UP to model dimension
+                    attn_outputs_modeldim = einops.einsum(cache[f'block_{i}_attention']['attn_output_per_head'][:,h,...], model.attention_blocks[i].output_projection.weight, 'batch object d_attn, d_model d_attn -> batch object d_model') # Shape [batch object d_model]
+                else:
+                    attn_outputs_modeldim = attn_output[:, h, :, :]
+                head_attribution  = einops.einsum(attn_outputs_modeldim, classifier_weights, 'batch object dmod, dmod -> batch object')
                 head_attributions.append(head_attribution)
         
         if include_mlp:
@@ -1151,14 +1187,20 @@ def get_direct_logit_attribution(model, # The model to test
 
         if include_mlp:
             # Get MLP contributions
-            attributions[f"block_{i}_mlp"] = einops.einsum(mlp_output, classifier_weights, 'batch object dmod, batch object dmod -> batch object')
+            attributions[f"block_{i}_mlp"] = einops.einsum(mlp_output, classifier_weights, 'batch object dmod, dmod -> batch object')
     
     
     # Aggregate attributions across batches for analysis
     aggregated = {}
     for key, attr in attributions.items():
         # Average across batch and objects
-        aggregated[key] = einops.einsum(attr* mask, '... batch object -> ...') / einops.einsum(mask, 'batch object ->')
+        if is_reconstruction: # Easy, just sum them
+            aggregated[key] = einops.einsum(attr* mask, '... batch object -> ...') / einops.einsum(mask, 'batch object ->')
+        else: # Actually same. Though I think (probably in the above case AS WELL) we should really take abs values?
+            # total_logits
+            # abs_attr = torch.abs(attr)
+            abs_attr = attr
+            aggregated[key] = einops.einsum(abs_attr * mask, '... batch object -> ...') / einops.einsum(mask, '... batch object -> ...')
         # aggregated[key] = attr.mean(dim=(1, 2)).cpu().numpy()
     
     
@@ -1182,6 +1224,7 @@ def plot_logit_attributions(model,
                             TRANSPOSE=False,
                             title=None,
                             include_direct_from_embedding=True,
+                            is_reconstruction=True,
 ):
     assert(isinstance(true_incl, list)) # Just because this caused problems one time with empty plots but no fail
     assert(isinstance(type_incl, list)) # Similar check
@@ -1201,6 +1244,7 @@ def plot_logit_attributions(model,
                                     class_idx,
                                     include_mlp=include_mlp,
                                     include_direct_from_embedding=include_direct_from_embedding,
+                                    is_reconstruction=is_reconstruction,
         )
         plt.subplot(1,3,class_idx+1)
         vmax=max(vmax, np.nanmax(abs(r[class_idx])))
@@ -1229,7 +1273,13 @@ def plot_logit_attributions(model,
             plt.colorbar(fraction=0.066, pad=0.04)
         # TODO  Could tidy this up...
         if (not TRANSPOSE) and include_mlp:
-            plt.xticks(range(r[class_idx].shape[0]+1), [f"Head {i}" for i in range(r[class_idx].shape[0])] + ['MLP'], rotation=85)
+            plt.xticks(range(r[class_idx].shape[1]), [f"Head {i}" for i in range(r[class_idx].shape[1]-1)] + ['MLP'], rotation=85)
+            if include_direct_from_embedding:
+                plt.yticks(range(r[class_idx].shape[0]), ["Embedding"] + [f"Layer {i}" for i in range(r[class_idx].shape[0]-1)], rotation=5)
+            else:
+                print(f"{r[class_idx].shape=}")
+                print(f"{r[class_idx]=}")
+                plt.yticks(range(r[class_idx].shape[0]), [f"Layer {i}" for i in range(r[class_idx].shape[0])], rotation=5)
         if (not TRANSPOSE) and (not include_mlp):
             plt.xticks(range(r[class_idx].shape[1]), [f"Head {i}" for i in range(r[class_idx].shape[1])], rotation=85)
             if include_direct_from_embedding:

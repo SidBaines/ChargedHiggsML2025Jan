@@ -2,15 +2,18 @@
 ##############################################
 ##########       IMPORTS      ################
 ##############################################
-import numpy as np
 import os
+os.environ['OPENBLAS_NUM_THREADS'] = '4'
+os.environ['MKL_NUM_THREADS'] = '4'
+os.environ['OMP_NUM_THREADS'] = '4'
+import numpy as np
 import torch
 from datetime import datetime
 from lowleveldataloader import ProportionalMemoryMappedDataset
 import wandb
 import shutil
 from lowlevelrecometrics import HEPMetrics, HEPLoss, HEPLossWithEntropy, init_wandb
-from models import DeepSetsWithResidualSelfAttentionVariableTrueSkipBottleneck
+from models import TestNetwork
 from mechinterputils import run_with_cache_and_bottleneck, ActivationCache, hook_attention_heads
 from utils import basic_lr_scheduler
 
@@ -20,9 +23,6 @@ from utils import basic_lr_scheduler
 ##############################################
 # %%
 DRY_RUN=False
-os.environ['OPENBLAS_NUM_THREADS'] = '4'
-os.environ['MKL_NUM_THREADS'] = '4'
-os.environ['OMP_NUM_THREADS'] = '4'
 timeStr = datetime.now().strftime("%Y%m%d-%H%M%S")
 saveDir = "output/" + timeStr  + "_TrainingOutput/"
 os.makedirs(saveDir)
@@ -47,7 +47,7 @@ else:
 IS_CATEGORICAL = True
 PHI_ROTATED = False
 REMOVE_WHERE_TRUTH_WOULD_BE_CUT = True
-TAG_INFO_INPUT=True
+TAG_INFO_INPUT=False
 if True:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 else: # For testing new model architecture classes, probably run on cpu, since CUDA will just give difficult errors if there is some problem with the arch
@@ -102,11 +102,11 @@ validation_split_idx=0
 ############   MODEL TRAINING CONFIG  ################
 # Assumes that the data has already been binarised
 MODEL_ARCH="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP_WITH_BOTTLENECK"
-USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION = False # Bool. If true, we'll apply a loss penalty which encourages the attention weights to follow a distribution close to a specific entropy (can make this 0 for close to delta function ie 'pay attention to exactly one particle', log(2) for close to 'pay attention to exactly two particles', ...); aim of this is to make the model more interpretable
+USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION = True # Bool. If true, we'll apply a loss penalty which encourages the attention weights to follow a distribution close to a specific entropy (can make this 0 for close to delta function ie 'pay attention to exactly one particle', log(2) for close to 'pay attention to exactly two particles', ...); aim of this is to make the model more interpretable
 ATTENTION_OUTPUT_BOTTLENECK_SIZE = 1 # None or integer. If not None, then we will apply a linear reduction then expansion to the attention output (per head) to this integer, to reduce the dimensionality of data that can be passed around; aim of this is to make the model more interpretable
 num_blocks_variable=6
 num_clasifierlayers_variable=8
-model_cfg = {'include_mlp':False, 'd_model': 200, 'd_mlp': 300, 'num_blocks':num_blocks_variable, 'dropout_p': 0.0, "embedding_size":10, "num_heads":4}
+model_cfg = {'include_mlp':True, 'd_model': 152, 'd_attn':None, 'd_mlp': 400, 'num_blocks':num_blocks_variable, 'dropout_p': 0.0, "embedding_size":N_CTX, "num_heads":4}
 num_epochs = 30
 log_interval = int(50e3/batch_size)
 longer_log_interval = 100000000000
@@ -135,12 +135,32 @@ config = {
 
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 # %%
 ##############################################
 #########       DATA LOADING     #############
 ##############################################
 
-DATA_PATH=f'/data/atlas/baines/20250321v1_WithEventNumbers_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + f'_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT + '/'
+if 1: # All truth-reconstruction categories
+    DATA_PATH=f'/data/atlas/baines/20250321v1_WithEventNumbers_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + f'_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT + '/'
+else:
+    KEEP_ONLY_LJET_BOSONS = True
+    DATA_PATH=f'/data/atlas/baines/20250429v1_WithEventNumbers_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + f'_WithRecoMasses_{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT + '_OnlyLjetBosonTruth'*KEEP_ONLY_LJET_BOSONS + '/'
 assert(sum([i is not None for i in [KEEP_DSID, MIN_DSID, MAX_DSID]])<=1)
 if NORMALISE_DATA:
     means = np.load(f'{DATA_PATH}mean.npy')[1:]
@@ -240,7 +260,8 @@ if IS_CATEGORICAL:
 else:
     num_classes=1
 
-model = DeepSetsWithResidualSelfAttentionVariableTrueSkipBottleneck(use_lorentz_invariant_features=USE_LORENTZ_INVARIANT_FEATURES, bottleneck_attention=ATTENTION_OUTPUT_BOTTLENECK_SIZE, feature_set=['phi', 'eta', 'pt', 'm']+['tag']*TAG_INFO_INPUT, num_particle_types=N_CTX, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
+# model = TestNetwork(hidden_dim_attn=model_cfg['d_attn'], use_lorentz_invariant_features=USE_LORENTZ_INVARIANT_FEATURES, bottleneck_attention=ATTENTION_OUTPUT_BOTTLENECK_SIZE, feature_set=['phi', 'eta', 'pt', 'mnsq']+['tag']*TAG_INFO_INPUT, num_particle_types=N_CTX, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
+model = TestNetwork(hidden_dim_attn=model_cfg['d_attn'], use_lorentz_invariant_features=USE_LORENTZ_INVARIANT_FEATURES, bottleneck_attention=ATTENTION_OUTPUT_BOTTLENECK_SIZE, feature_set=['phi', 'eta', 'pt', 'm']+['tag']*TAG_INFO_INPUT, num_particle_types=N_CTX, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=config['weight_decay'])
 
 if 0: # This is optional, since we run with the cache now anyway to allow more interesting loss functions if we want them
@@ -281,8 +302,8 @@ if 0: #
 if not USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION:
     criterion = HEPLoss(is_categorical=IS_CATEGORICAL, apply_correlation_penalty=False, alpha=1.0, apply_valid_penalty=False, valid_penalty_weight=1.0)
 else:
-    criterion = HEPLossWithEntropy(entropy_loss=True, entropy_weight=1e-3, target_entropy=np.log(2), is_categorical=IS_CATEGORICAL, apply_correlation_penalty=False, alpha=1.0, apply_valid_penalty=False, valid_penalty_weight=1.0)
-    # criterion = HEPLossWithEntropy(entropy_loss=True, entropy_weight=1e-3, target_entropy=0, is_categorical=IS_CATEGORICAL, apply_correlation_penalty=False, alpha=1.0, apply_valid_penalty=False, valid_penalty_weight=1.0)
+    # criterion = HEPLossWithEntropy(entropy_loss=True, entropy_weight=1e-3, target_entropy=np.log(2), is_categorical=IS_CATEGORICAL, apply_correlation_penalty=False, alpha=1.0, apply_valid_penalty=False, valid_penalty_weight=1.0)
+    criterion = HEPLossWithEntropy(entropy_loss=True, entropy_weight=1e-2, target_entropy=0, is_categorical=IS_CATEGORICAL, apply_correlation_penalty=False, alpha=1.0, apply_valid_penalty=False, valid_penalty_weight=1.0)
 train_metrics = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
 val_metrics = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), total_weights_per_dsid=val_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000])
 train_metrics_MCWts = HEPMetrics(N_CTX-1, max_n_objs_to_read, is_categorical=IS_CATEGORICAL, num_categories=3, max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
@@ -315,7 +336,7 @@ for epoch in range(num_epochs):
     for batch_idx in range(orig_len_train_dataloader):
         ######## Calculate learning rate ########
         if ((batch_idx%10)==0):
-            new_lr = basic_lr_scheduler(batch_idx + epoch*orig_len_train_dataloader, config['learning_rate'], config['learning_rate_low'], num_lr_steps, config["learning_rate_log_decay"], warmup_steps=100, warmup_rate=3e-3) # Or in theory could use global step
+            new_lr = basic_lr_scheduler(batch_idx + epoch*orig_len_train_dataloader, config['learning_rate'], config['learning_rate_low'], num_lr_steps, config["learning_rate_log_decay"], warmup_steps=100, warmup_rate=1e-3) # Or in theory could use global step
             for param_group in optimizer.param_groups:
                 param_group['lr'] = new_lr
             if ((batch_idx%1000)==0):
@@ -328,9 +349,15 @@ for epoch in range(num_epochs):
         batch = next(train_dataloader)
         x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
         optimizer.zero_grad()
-        outputs, cache = run_with_cache_and_bottleneck(model, x[...,:4+int(TAG_INFO_INPUT)], types, detach=False)
+        if (ATTENTION_OUTPUT_BOTTLENECK_SIZE is None) and (not USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION):
+            outputs = model(x[...,:4+int(TAG_INFO_INPUT)], types)
+        else:
+            outputs, cache = run_with_cache_and_bottleneck(model, x[...,:4+int(TAG_INFO_INPUT)], types, detach=False)
         outputs = outputs.squeeze()
-        loss = criterion(cache, outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], x[...,:4])
+        if USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION:
+            loss = criterion(cache, outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], x[...,:4])
+        else:
+            loss = criterion(outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], x[...,:4])
         train_loss_epoch += loss.item() * w.sum().item()
         sum_weights_epoch += w.sum().item()
         ######## Training backward pass  ########
@@ -382,11 +409,18 @@ for epoch in range(num_epochs):
                 x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
                 # outputs, cache = run_with_cache_and_singleAttention(model, x[...,:4+int(TAG_INFO_INPUT)], types, detach=False)
                 # outputs, cache = run_with_cache_and_minAttention(model, x[...,:4+int(TAG_INFO_INPUT)], types, 0.5, detach=False)
-                outputs, cache = run_with_cache_and_bottleneck(model, x[...,:4+int(TAG_INFO_INPUT)], types, detach=False)
+
+                if (ATTENTION_OUTPUT_BOTTLENECK_SIZE is None) and (not USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION):
+                    outputs = model(x[...,:4+int(TAG_INFO_INPUT)], types)
+                else:
+                    outputs, cache = run_with_cache_and_bottleneck(model, x[...,:4+int(TAG_INFO_INPUT)], types, detach=False)
                 outputs = outputs.squeeze()
                 
+                if USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION:
+                    loss += criterion(cache, outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], x[...,:4]).sum() * w.sum()
+                else:
+                    loss += criterion(outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], x[...,:4]).sum() * w.sum()
                 # loss += criterion(outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], cache, x[...,:4]).sum() * w.sum()
-                loss += criterion(cache, outputs, x[...,-1], types, N_CTX-1, max_n_objs_to_read, w, config['wandb'], x[...,:4]).sum() * w.sum()
                 wt_sum += w.sum()
                 val_metrics.update(outputs, x[...,-1], w, dsids, types)
                 val_metrics_MCWts.update(outputs, x[...,-1], MCWts, dsids, types)

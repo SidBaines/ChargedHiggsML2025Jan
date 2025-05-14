@@ -279,10 +279,10 @@ class HEPMetrics:
             # There are 6 ways to reconstruct an event correctly
             # 0: small-R-pair H, small-R-pair W
             # 1: small-R-pair H, leptonic-W
-            # 2: small-R-pair H, large-R-pair W
-            # 3: large-R-pair H, small-R-pair W
-            # 4: large-R-pair H, leptonic-W
-            # 5: large-R-pair H, large-R-pair W
+            # 2: small-R-pair H, large-R W
+            # 3: large-R H, small-R-pair W
+            # 4: large-R H, leptonic-W
+            # 5: large-R H, large-R W
             
             category_mask = true_reco_modes==reco_category
             mask = idx_mask & category_mask
@@ -587,17 +587,17 @@ class HEPLossWithEntropy(torch.nn.Module):
         total_entropy_loss = 0
         total_heads = 0
         eps=1e-8
-        entroy_losses = {}
-        for layer in range(len([k for k in cache.store.keys() if 'attention' in k])):
-            entroy_losses[layer] = {}
+        entropy_losses = {}
+        for layer in range(len([k for k in cache.store.keys() if (('attention' in k) and (not ('post' in k)))])):
+            entropy_losses[layer] = {}
             for head in range(cache.store[f'block_{layer}_attention']['attn_weights_per_head'].shape[1]):
                 attn_wts = (cache[f'block_{layer}_attention']['attn_weights_per_head'][:,head,...]) # Shape [batch object_query object_key]
                 # Calculate the entropy along the last dimension (note, the padding should have been handled already so they should be 0)
                 entropy_l = - (attn_wts * (attn_wts + eps).log()).sum(dim=-1)
                 # entropy_l = (entropy_l - self.target_entropy).abs()
-                entroy_losses[layer][head] = einops.einsum(entropy_l * (types!=padding_token), 'batch object -> batch') / einops.einsum(types!=padding_token, 'batch object -> batch')
-                # total_entropy_loss += (entroy_losses[layer][head] * weights).sum() / weights.sum()
-                total_entropy_loss += (entroy_losses[layer][head]).mean()
+                entropy_losses[layer][head] = einops.einsum(entropy_l * (types!=padding_token), 'batch object -> batch') / einops.einsum(types!=padding_token, 'batch object -> batch')
+                # total_entropy_loss += (entropy_losses[layer][head] * weights).sum() / weights.sum()
+                total_entropy_loss += (entropy_losses[layer][head]).mean()
                 total_heads += 1
         
         
@@ -642,7 +642,7 @@ class HEPLossWithEntropy(torch.nn.Module):
                 # "loss/lv_mass": lv_mass_loss.item()
             }, commit=False)
             wandb.log({
-                f"loss/z_entropy_layer_{layer}_head_{head}": entroy_losses[layer][head].mean().item() for layer in entroy_losses.keys() for head in entroy_losses[layer].keys()
+                f"loss/z_entropy_layer_{layer}_head_{head}": entropy_losses[layer][head].mean().item() for layer in entropy_losses.keys() for head in entropy_losses[layer].keys()
             }, commit=False)
         
         return total_loss

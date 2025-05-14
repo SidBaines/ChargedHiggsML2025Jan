@@ -8,7 +8,7 @@ ts = []
 ts.append(time.time())
 
 import numpy as np
-from utils import read_file
+from utils import read_file, check_category
 import os
 import torch
 from datetime import datetime
@@ -21,6 +21,7 @@ from utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtE
 
 # %% Some basic setup
 # Some choices about the  process
+KEEP_ONLY_LJET_BOSONS = True # Only want this if we are TRAINING the RECONSTRUCTION net!
 REMOVE_WHERE_TRUTH_WOULD_BE_CUT = True # Only want this if we are TRAINING the RECONSTRUCTION net! For predicting reco, or for training/predicting classification, we want these events to be present!
 INCLUDE_ALL_SELECTIONS = True # Probably want this true nowadays, unless comparing to old method
 INCLUDE_NEGATIVE_SELECTIONS = True # Probably want this true nowadays, unless comparing to old method
@@ -50,7 +51,7 @@ else:
     N_CTX = 6 # the five types of object, plus one for 'no object;. We need to hardcode this unfortunately; it will depend on the preprocessed root files we're reading in.
 BIN_WRITE_TYPE=np.float32
 max_n_objs = 15 # BE CAREFUL because this might change and if it does you ahve to rebinarise
-OUTPUT_DIR = '/data/atlas/baines/20250321v1_WithEventNumbers_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
+OUTPUT_DIR = '/data/atlas/baines/20250429v1_WithEventNumbers_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5' + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + 'semi_shuffled_'*SHUFFLE_OBJECTS + f'{max_n_objs}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT + '_OnlyLjetBosonTruth'*KEEP_ONLY_LJET_BOSONS+'/'
 # OUTPUT_DIR = './tmp/'
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 if INCLUDE_TAG_INFO:
@@ -263,6 +264,11 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
     successful_truth_match_removals = ~(successful_truth_match.astype(bool)) & is_sig
     # Get rid of events where we don't keep enough objects to keep all the relevant truth objects
     true_inclusion = x_part[:, -1, :]
+    if KEEP_ONLY_LJET_BOSONS:
+        true_cat = check_category(type_part, true_inclusion, N_CTX-1, use_torch=False)
+        OnlyLjetBoson_removal = ~((true_cat==4) | (true_cat==5))
+    else:
+        OnlyLjetBoson_removal = np.zeros_like(selection_category==0)
     if REMOVE_WHERE_TRUTH_WOULD_BE_CUT:
         keeping_all_truth_removal = (last_true_index(true_inclusion!=0)>max_n_objs-1) & is_sig
     else:
@@ -283,7 +289,7 @@ def process_single_file(filepath, max_n_objs, shuffle_objs):
         uncertain_cut = (((y[:, 1] != 1) & (y[:, 1] != 2)) & is_sig)
     else:
         uncertain_cut = np.zeros_like(no_ljet)#.astype(bool)
-    combined_removal = (no_ljet | selection_removals | low_MET | mH_cut | uncertain_cut | keeping_all_truth_removal | successful_truth_match_removals)
+    combined_removal = (no_ljet | selection_removals | low_MET | mH_cut | uncertain_cut | keeping_all_truth_removal | successful_truth_match_removals | OnlyLjetBoson_removal)
     removals = {0: (combined_removal & (~is_sig)).sum(),
                 1: (combined_removal & is_sig).sum()}
     x_part = x_part[~combined_removal]
@@ -362,20 +368,20 @@ types_dict = {0: 'electron', 1: 'muon', 2: 'neutrino', 3: 'ljet', 4: 'sjet', 5: 
 # DATA_PATH='/data/atlas/HplusWh/20250115_SeparateLargeRJets_NominalWeights_extrainfo_fixed/'
 # DATA_PATH='/data/atlas/HplusWh/20250218_Cats038910_NoDeltaRReq_TagInfo/'
 # DATA_PATH='/data/atlas/HplusWh/20250227_v4_tmpWithTrueInclusion/' # For background this is okay
-DATA_PATH='/data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/' # For signal must be this!
+# DATA_PATH='/data/atlas/HplusWh/20250305_WithTrueInclusion_FixedOverlapWHsjet/' # For signal must be this! No longer true I think
 DATA_PATH='/data/atlas/HplusWh/20250313_WithTrueInclusion_FixedOverlapWHsjet_SmallJetCloseToLargeJetRemovalDeltaR0.5/'
 MAX_CHUNK_SIZE = 100000
 # MAX_PER_DSID = {dsid : 10000000 for dsid in dsid_set}
 # MAX_PER_DSID[410470] = 100
 for dsid in dsid_set:
     # if dsid <= 700341:
-    # if dsid != 410470:
     # if dsid < 700333:
+    # if dsid != 410470:
     #     continue
     # if '510' in str(dsid):
     #     continue
-    # if (dsid < 500000) or (dsid > 600000): # Is background
-    if (dsid > 500000) and (dsid < 600000): # Is signal
+    if (dsid < 500000) or (dsid > 600000): # Is background
+    # if (dsid > 500000) and (dsid < 600000): # Is signal
         continue
 # for dsid in [510120]:
     # if ((500000<dsid) and (600000>dsid)) or (dsid==410470):

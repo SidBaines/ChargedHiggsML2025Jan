@@ -13,6 +13,36 @@ import vector
 vector.register_awkward()
 
 
+# %%
+def deltaR(A, B):
+    # Extract components
+    px1, py1, pz1 = A[...,0], A[...,1], A[...,2]
+    px2, py2, pz2 = B[...,0], B[...,1], B[...,2]
+    
+    # Compute phi
+    phi1 = np.atan2(py1, px1)
+    phi2 = np.atan2(py2, px2)
+    
+    # Compute eta
+    def eta(pz, px, py):
+        p = np.sqrt(px**2 + py**2 + pz**2)
+        return 0.5 * np.log((p + pz) / (p - pz + 1e-8))  # avoid div by zero
+    
+    eta1 = eta(pz1, px1, py1)
+    eta2 = eta(pz2, px2, py2)
+    
+    # Compute delta_eta and delta_phi
+    delta_eta = eta1 - eta2
+    delta_phi = phi1 - phi2
+    delta_phi = (delta_phi + np.pi) % (2 * np.pi) - np.pi  # wrap to [-pi, pi]
+
+    # Compute deltaR
+    delta_r = np.sqrt(delta_eta**2 + delta_phi**2)
+    return delta_r, delta_phi, delta_eta
+
+
+# %%
+
 def read_file(
         filepath,
         max_num_particles=128,

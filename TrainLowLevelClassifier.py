@@ -16,6 +16,8 @@ from lowleveldataloader import ProportionalMemoryMappedDataset
 from models import DeepSetsWithResidualSelfAttentionVariableTrueSkipClassifier
 from lowlevelmetrics import HEPMetrics, HEPLoss, init_wandb
 from utils import basic_lr_scheduler
+from models import TestNetworkClassifier, GNNParticleClassifier, TestNetworkClassifierImmediatePool
+from mechinterputils import run_with_cache_and_bottleneck
 
 
 
@@ -54,6 +56,7 @@ INCLUDE_NEGATIVE_SELECTIONS = True
 USE_OLD_TRUTH_SETTING = False
 PHI_ROTATED = False
 USE_LORENTZ_INVARIANT_FEATURES = True
+TAG_INFO_INPUT = True
 TOSS_UNCERTAIN_TRUTH = True
 SHUFFLE_OBJECTS = True
 NORMALISE_DATA = False
@@ -110,12 +113,15 @@ MAX_DSID = None # a dsid if we only want to keep this DSID or below (inclusive) 
 
 ############   MODEL TRAINING CONFIG  ################
 MODEL_ARCH="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP"
-num_blocks_variable=3
-model_cfg = {'include_mlp':True, 'd_model': 256, 'd_mlp': 256, 'num_blocks':num_blocks_variable, 'dropout_p': 0.15, "embedding_size":16, "num_heads":4}
+ATTENTION_OUTPUT_BOTTLENECK_SIZE = 1
+USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION = True
+num_blocks_variable=10
+model_cfg = {'d_attn':None, 'include_mlp':True, 'd_model': 152, 'd_mlp': 400, 'num_blocks':num_blocks_variable, 'dropout_p': 0.0, "embedding_size":N_CTX, "num_heads":4}
+
 num_epochs = 30
 log_interval = int(50e3/batch_size)
 longer_log_interval = 100000000000
-SAVE_MODEL_EVERY = 25
+SAVE_MODEL_EVERY = 5
 name_mapping = {"DEEPSETS":"DS", 
                 "HYBRID_SELFATTENTION_GATED":"DSSAGA", 
                 "DEEPSETS_SELFATTENTION":"DSSA", 
@@ -219,7 +225,7 @@ val_dataloader = ProportionalMemoryMappedDataset(
                  N_Real_Vars_To_Return=N_Real_Vars,
                  class_proportions = None,
                 #  batch_size=64*8*64*8,
-                 batch_size=64*8*64,
+                 batch_size=batch_size,
                  device=device,
                  is_train=False,
                  validation_split_idx=validation_split_idx,
@@ -243,7 +249,10 @@ print(val_dataloader.get_total_samples())
 ##############################################
 ########       CREATE MODEL      #############
 ##############################################
-model = DeepSetsWithResidualSelfAttentionVariableTrueSkipClassifier(input_dim=N_Real_Vars, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
+# model = DeepSetsWithResidualSelfAttentionVariableTrueSkipClassifier(input_dim=N_Real_Vars, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
+model = TestNetworkClassifier(hidden_dim_attn=model_cfg['d_attn'], use_lorentz_invariant_features=USE_LORENTZ_INVARIANT_FEATURES, bottleneck_attention=ATTENTION_OUTPUT_BOTTLENECK_SIZE, feature_set=['phi', 'eta', 'pt', 'm']+['tag']*TAG_INFO_INPUT, num_particle_types=N_CTX, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
+# model = TestNetworkClassifierImmediatePool(hidden_dim_attn=model_cfg['d_attn'], use_lorentz_invariant_features=USE_LORENTZ_INVARIANT_FEATURES, bottleneck_attention=ATTENTION_OUTPUT_BOTTLENECK_SIZE, feature_set=['phi', 'eta', 'pt', 'm']+['tag']*TAG_INFO_INPUT, num_particle_types=N_CTX, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
+# model = GNNParticleClassifier(conv_type='edge', feature_set=['phi', 'eta', 'pt', 'm']+['tag']*TAG_INFO_INPUT, num_particle_types=N_CTX, num_layers=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=config['weight_decay'])
 print(sum(p.numel() for p in model.parameters()))
 for p in model.named_parameters():
@@ -273,7 +282,12 @@ if 0: #
 ##############################################
 #######   SET UP METRIC TRACKERS      ########
 ##############################################
-criterion = HEPLoss(apply_correlation_penalty=False, alpha=1.0)
+have_saved_a_model = False
+if not USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION:
+    criterion = HEPLoss(N_CTX, apply_correlation_penalty=False, alpha=1.0, calc_entropy_loss=False)
+else:
+    criterion = HEPLoss(N_CTX, apply_correlation_penalty=False, alpha=1.0, use_entropy_loss=True, entropy_weight=1e-3)
+
 train_metrics = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
 val_metrics = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(val_dataloader.get_total_samples()), total_weights_per_dsid=val_dataloader.abs_weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000])
 train_metrics_MCWts = HEPMetrics(max_bkg_levels=[100, 200], max_buffer_len=int(train_dataloader.get_total_samples()), total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[100, 500, 1000, 5000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
@@ -317,9 +331,15 @@ for epoch in range(num_epochs):
         batch = next(train_dataloader)
         x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
         optimizer.zero_grad()
-        outputs = model(x, types)
+        if (ATTENTION_OUTPUT_BOTTLENECK_SIZE is None) and (not criterion.calc_entropy_loss):
+            outputs = model(x, types)
+        else:
+            outputs, cache = run_with_cache_and_bottleneck(model, x[...,:4+int(TAG_INFO_INPUT)], types, detach=False)
         outputs[:, 3-target_channel_num] = -100 # Have to zero out the other channel, since we are only training on one channel at a time
-        loss = criterion(outputs, y, w, config['wandb'], mqq, mlv, mHs)
+        if (not criterion.calc_entropy_loss):
+            loss = criterion(outputs, y, w, config['wandb'], mqq, mlv, mHs)
+        else:
+            loss = criterion(outputs, y, w, config['wandb'], mqq, mlv, mHs, cache=cache)
         train_loss_epoch += loss.item() * w.sum().item()
         sum_weights_epoch += w.sum().item()
         ######## Training backward pass  ########
@@ -373,14 +393,20 @@ for epoch in range(num_epochs):
 
                 x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
                 # x, y, w, types, mqq, mlv, MCWts = x.to(device), y.to(device), w.to(device), types.to(device), mqq.to(device), mlv.to(device), MCWts.to(device)
-                outputs = model(x, types)
+                if (ATTENTION_OUTPUT_BOTTLENECK_SIZE is None) and (not criterion.calc_entropy_loss):
+                    outputs = model(x, types)
+                else:
+                    outputs, cache = run_with_cache_and_bottleneck(model, x[...,:4+int(TAG_INFO_INPUT)], types, detach=False)
                 if 0:
                     loss += criterion(outputs[:,[0, target_channel_num]], y[:,[0, target_channel_num]], w, config['wandb'], mqq, mlv, mHs).sum() * w.sum()
                     wt_sum += w.sum()
                     outputs[:, 3-target_channel_num] = -100
                 else:
                     outputs[:, 3-target_channel_num] = -100
-                    loss += criterion(outputs, y, w, config['wandb'], mqq, mlv, mHs).sum() * w.sum()
+                    if (not criterion.calc_entropy_loss):
+                        loss += criterion(outputs, y, w, config['wandb'], mqq, mlv, mHs).sum() * w.sum()
+                    else:
+                        loss += criterion(outputs, y, w, config['wandb'], mqq, mlv, mHs, cache=cache).sum() * w.sum()
                     wt_sum += w.sum()
                 val_metrics.update(outputs, y.argmax(dim=-1), w, mqq, mlv, dsids, mHs)
                 val_metrics_MCWts.update(outputs, y.argmax(dim=-1), MCWts, mqq, mlv, dsids, mHs)
@@ -410,6 +436,7 @@ for epoch in range(num_epochs):
             modelSaveDir = "%s/models/%s_Nplits%d_ValIdx%d/"%(saveDir, target_channel, n_splits, validation_split_idx)
             os.makedirs(modelSaveDir, exist_ok=True)
             torch.save(model.state_dict(), modelSaveDir + "/chkpt%d_%d" %(epoch, global_step) + '.pth')
+            have_saved_a_model = True
         except:
             pass
 # wandb.finish()
@@ -418,6 +445,7 @@ for epoch in range(num_epochs):
 ##############################################
 ###########   SAVE FINAL MODEL      ##########
 ##############################################
-modelSaveDir = "%s/models/%s_Nplits%d_ValIdx%d/"%(saveDir, target_channel, n_splits, validation_split_idx)
-os.makedirs(modelSaveDir, exist_ok=True)
-torch.save(model.state_dict(), modelSaveDir + "/chkpt%d" %(global_step) + '.pth')
+if not have_saved_a_model:
+    modelSaveDir = "%s/models/%s_Nplits%d_ValIdx%d/"%(saveDir, target_channel, n_splits, validation_split_idx)
+    os.makedirs(modelSaveDir, exist_ok=True)
+    torch.save(model.state_dict(), modelSaveDir + "/chkpt%d" %(global_step) + '.pth')
