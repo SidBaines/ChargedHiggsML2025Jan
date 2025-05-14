@@ -8,7 +8,7 @@ ts = []
 ts.append(time.time())
 
 import numpy as np
-from utils import read_file, check_category
+from utils.utils import read_file, check_category
 import os
 import torch
 from datetime import datetime
@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader, Dataset
 from jaxtyping import Float, Int
 import einops
 import matplotlib.pyplot as plt
-from utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtEtaPhiE, Rotate4VectorPhi, Rotate4VectorEta, Rotate4VectorPhiEta
+from utils.utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtEtaPhiE, Rotate4VectorPhi, Rotate4VectorEta, Rotate4VectorPhiEta
 # import datasets
 
 # %% Some basic setup

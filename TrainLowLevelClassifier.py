@@ -12,12 +12,12 @@ import wandb
 import shutil
 
 ######## My imports ########
-from lowleveldataloader import ProportionalMemoryMappedDataset
-from models import DeepSetsWithResidualSelfAttentionVariableTrueSkipClassifier
-from lowlevelmetrics import HEPMetrics, HEPLoss, init_wandb
-from utils import basic_lr_scheduler
-from models import TestNetworkClassifier, GNNParticleClassifier, TestNetworkClassifierImmediatePool
-from mechinterputils import run_with_cache_and_bottleneck
+from dataloaders.lowleveldataloader import ProportionalMemoryMappedDataset
+from models.models import DeepSetsWithResidualSelfAttentionVariableTrueSkipClassifier
+from metrics.lowlevelmetrics import HEPMetrics, HEPLoss, init_wandb
+from utils.utils import basic_lr_scheduler
+from models.models import TestNetworkClassifier, GNNParticleClassifier, TestNetworkClassifierImmediatePool
+from interp.mechinterputils import run_with_cache_and_bottleneck
 
 
 

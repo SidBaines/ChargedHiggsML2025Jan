@@ -1,19 +1,16 @@
 # %% # Load required modules
-import mechinterputils
+from interp import mechinterputils
 import importlib 
 import numpy as np
 import os
 import torch
 from datetime import datetime
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-# mpl.use('Agg')
-from lowleveldataloader import ProportionalMemoryMappedDataset
+from dataloaders.lowleveldataloader import ProportionalMemoryMappedDataset
 from torch import nn
 import matplotlib.pyplot as plt
 import shutil
-from lowlevelrecometrics import HEPMetrics
-from models import TestNetwork
+from metrics.lowlevelmetrics import HEPMetrics
+from models.models import TestNetwork
 
 # %%
 timeStr = datetime.now().strftime("%Y%m%d-%H%M%S")

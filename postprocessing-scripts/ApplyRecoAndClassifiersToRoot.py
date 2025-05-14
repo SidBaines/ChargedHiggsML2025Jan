@@ -8,7 +8,7 @@ ts = []
 ts.append(time.time())
 
 import numpy as np
-from utils import read_file
+from utils.utils import read_file
 import os
 import torch
 from datetime import datetime
@@ -16,7 +16,7 @@ from torch.utils.data import DataLoader, Dataset
 from jaxtyping import Float, Int
 import einops
 import matplotlib.pyplot as plt
-from utils import get_num_btags, check_category, Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtEtaPhiE, Rotate4VectorPhi, Rotate4VectorEta, Rotate4VectorPhiEta
+from utils.utils import get_num_btags, check_category, Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtEtaPhiE, Rotate4VectorPhi, Rotate4VectorEta, Rotate4VectorPhiEta
 from torch import nn
 # import datasets
 
@@ -69,7 +69,7 @@ MASS_DSID_MAPPING = {v: k for k, v in DSID_MASS_MAPPING.items()} # Create inver
 types_set = np.array([-2, 1, 2])  # Try not to change this often - have to re-binarise if we do!
 
 
-from utils import check_valid, check_category
+from utils.utils import check_valid, check_category
 
 
 

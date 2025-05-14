@@ -9,7 +9,7 @@ ts = []
 ts.append(time.time())
 
 import numpy as np
-from utils import read_file
+from utils.utils import read_file
 import os
 import torch
 from datetime import datetime
@@ -17,7 +17,7 @@ from torch.utils.data import DataLoader, Dataset
 from jaxtyping import Float, Int
 import einops
 import matplotlib.pyplot as plt
-# from utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtEtaPhiE, Rotate4VectorPhi, Rotate4VectorEta, Rotate4VectorPhiEta
+# from utils.utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM, GetXYZT_FromPtEtaPhiE, Rotate4VectorPhi, Rotate4VectorEta, Rotate4VectorPhiEta
 # import datasets
 
 # %% Some basic setup
@@ -113,7 +113,7 @@ def process_single_file(filepath, target_channel):
             #qqbb neural net inputs
             'deltaR_LH','deltaPhi_HWhad','deltaEta_HWhad','ratio_Hpt_mVH_qqbb','ratio_Wpt_mVH_qqbb','deltaR_LWhad','LepEnergyFracHad',
             ]
-    from utils import read_file
+    from utils.utils import read_file
     _, x_event, y = read_file(filepath, 
                                 particle_features=[],
                                 event_level_features=event_level_features,

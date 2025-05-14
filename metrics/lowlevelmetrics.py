@@ -4,7 +4,7 @@ import wandb
 from matplotlib import pyplot as plt
 import numpy as np
 from sklearn.metrics import roc_curve
-from utils import weighted_correlation
+from utils.utils import weighted_correlation
 import einops
 
 def init_wandb(config):

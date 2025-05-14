@@ -9,13 +9,13 @@ os.environ['OMP_NUM_THREADS'] = '4'
 import numpy as np
 import torch
 from datetime import datetime
-from lowleveldataloader import ProportionalMemoryMappedDataset
+from dataloaders.lowleveldataloader import ProportionalMemoryMappedDataset
 import wandb
 import shutil
-from lowlevelrecometrics import HEPMetrics, HEPLoss, HEPLossWithEntropy, init_wandb
-from models import TestNetwork
-from mechinterputils import run_with_cache_and_bottleneck, ActivationCache, hook_attention_heads
-from utils import basic_lr_scheduler
+from metrics.lowlevelmetrics import HEPMetrics, HEPLoss, HEPLossWithEntropy, init_wandb
+from models.models import TestNetwork
+from interp.mechinterputils import run_with_cache_and_bottleneck, ActivationCache, hook_attention_heads
+from utils.utils import basic_lr_scheduler
 
 
 ##############################################

@@ -3,9 +3,9 @@ import torch.nn.functional as F
 import wandb
 from matplotlib import pyplot as plt
 from sklearn.metrics import roc_curve
-from utils import weighted_correlation
+from utils.utils import weighted_correlation
 import einops
-from utils import Get_PtEtaPhiM_fromXYZT, check_category
+from utils.utils import Get_PtEtaPhiM_fromXYZT, check_category
 
 def init_wandb(config):
     wandb.init(

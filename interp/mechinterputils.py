@@ -2,7 +2,7 @@ import torch
 import torch.nn as nn
 from collections import defaultdict
 from typing import Dict, List, Callable, Any, Optional, Union, Tuple
-from utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM
+from utils.utils import Get_PtEtaPhiM_fromXYZT, GetXYZT_FromPtEtaPhiM
 import einops
 from pysr import PySRRegressor
 from sklearn.preprocessing import StandardScaler

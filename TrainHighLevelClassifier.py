@@ -10,28 +10,14 @@ os.environ['MKL_NUM_THREADS'] = '16'
 os.environ['OMP_NUM_THREADS'] = '16'
 import torch
 from datetime import datetime
-from jaxtyping import Float
-import einops
-import matplotlib.pyplot as plt
-import matplotlib as mpl
-mpl.use('Agg') # If you want to run in batch mode, and not see the plots made
-from utils import decode_y_eval_to_info
-from highleveldataloader import ProportionalMemoryMappedDatasetHighLevel
-from transformer_lens import HookedTransformer, HookedTransformerConfig
-from transformer_lens.hook_points import HookPoint
-from jaxtyping import Float, Int
-from torch import Tensor, nn
-import einops
+from dataloaders.highleveldataloader import ProportionalMemoryMappedDatasetHighLevel
+from torch import nn
 import wandb
 import torch.nn.functional as F
-# from torchmetrics import Accuracy, AUC, ConfusionMatrix
-# from torchmetrics import ConfusionMatrix
-# from torchmetrics.classification import MulticlassAccuracy, MulticlassAUROC
-import matplotlib.pyplot as plt
-from sklearn.metrics import roc_auc_score
 import shutil
-from MyMetricsHighLevel import HEPMetrics, HEPLoss, init_wandb
-from typing import List
+from metrics.highlevelmetrics import HEPMetrics, HEPLoss, init_wandb
+from utils.utils import basic_lr_scheduler
+
 
 # %%
 timeStr = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -73,6 +59,7 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 batch_size = 64*4
 DATA_PATH = '/data/atlas/baines/20250322v4_highLevel' + '_MetCut'*MET_CUT_ON + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
+# DATA_PATH = '/data/atlas/baines/20250429v1_HighLevelAppliedRecoNNSplit/' # For data which was recostructed using low-level network then the relevant high-level data was calculated
 memmap_paths_train = {}
 memmap_paths_val = {}
 channel = 'lvbb'
@@ -151,9 +138,6 @@ models = {}
 fit_histories = {}
 model_n = 0
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
 
 class ConfigurableNN(nn.Module):
     def __init__(self, N_inputs, N_targets, hidden_layers, dropout_prob=0.0, use_batchnorm=True):
@@ -219,9 +203,6 @@ models[model_n]['model'].summary()
 # %%
 class_weights = [1 for _ in range(N_TARGETS)]
 labels = ['Bkg', 'Lep', 'Had'] # truth==0 is bkg, truth==1 is leptonic decay, truth==2 is hadronic decay
-class_weights_expanded = einops.repeat(torch.Tensor(class_weights), 't -> batch t', batch=batch_size).to(device)
-# Cosine learning rate scheduler parameters
-from utils import basic_lr_scheduler
 
 
 # SHOULD CHANGE WEIGHT DECAY BACK (IT WAS 1e-5 before)
