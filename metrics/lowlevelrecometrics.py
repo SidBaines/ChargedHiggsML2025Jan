@@ -1,8 +1,5 @@
 import torch 
-import torch.nn.functional as F
 import wandb
-from matplotlib import pyplot as plt
-from sklearn.metrics import roc_curve
 from utils.utils import weighted_correlation
 import einops
 from utils.utils import Get_PtEtaPhiM_fromXYZT, check_category
@@ -644,8 +641,20 @@ class HEPLossWithEntropy(torch.nn.Module):
             wandb.log({
                 f"loss/z_entropy_layer_{layer}_head_{head}": entropy_losses[layer][head].mean().item() for layer in entropy_losses.keys() for head in entropy_losses[layer].keys()
             }, commit=False)
+            return total_loss
+        else:
+            loss_dict = {
+                "loss/ce": (ce_loss.sum())/(weights.sum()).item(),
+                "loss/total_withCorrelation": ((ce_loss.sum())/(weights.sum()) + self.alpha * correlation_loss).item(),
+                "loss/total_withCorrelationAndValid": ((ce_loss.sum())/(weights.sum()) + self.alpha * correlation_loss + self.valid_penalty_weight * isvalid_loss).item(),
+                "loss/correlation": correlation_loss.item(),
+                "loss/valid": isvalid_loss.item(),
+                "loss/entropy": total_entropy_loss.item(),
+                # f"loss/z_entropy_layer_{layer}_head_{head}": entropy_losses[layer][head].mean().item() for layer in entropy_losses.keys() for head in entropy_losses[layer].keys()
+            }
+            loss_dict.update({f"loss/z_entropy_layer_{layer}_head_{head}": entropy_losses[layer][head].mean().item() for layer in entropy_losses.keys() for head in entropy_losses[layer].keys()})
+            return total_loss, loss_dict
         
-        return total_loss
 
     def scale_loss_by_mH(self, mH):
         # TODO replace this with just like a torch.gaussain or something to allow more flexibility
