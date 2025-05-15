@@ -604,6 +604,91 @@ if 1:
             fig.show()
 
 
+# %% Now we do the same as above but we will also select the query and key objects
+# First, we need to define the query and key selection functions
+
+if 1:
+    for success in [True, False]:
+        # query='TrueHiggs'
+        # key='TrueW'
+        for query in ['TrueHiggs', 'TrueW', 'None']:
+            for key in ['TrueHiggs', 'TrueW', 'None']:
+                if query=='TrueHiggs':
+                    def query_selection_fn(object_types, true_inclusion):
+                        return true_inclusion == 1 # Select all true Higgs constituents
+                elif query=='TrueW':
+                    def query_selection_fn(object_types, true_inclusion):
+                        return true_inclusion > 1 # Select all true W constituents (==2 is hadronic W candidates, ==3 is leptonic W candidates)
+                elif query=='None':
+                    def query_selection_fn(object_types, true_inclusion):
+                        return torch.ones_like(true_inclusion, dtype=torch.bool)
+                if key=='TrueHiggs':
+                    def key_selection_fn(object_types, true_inclusion):
+                        return true_inclusion == 1 # Select all true Higgs constituents
+                elif key=='TrueW':
+                    def key_selection_fn(object_types, true_inclusion):
+                        return true_inclusion > 1 # Select all true W constituents (==2 is hadronic W candidates, ==3 is leptonic W candidates)
+                elif key=='None':
+                    def key_selection_fn(object_types, true_inclusion):
+                        return torch.ones_like(true_inclusion, dtype=torch.bool)
+                COMBINE_LEPTONS_FOR_PLOTS=False
+                for category in [5,4,3,2,1,0]:
+                    if (category>3) and success:
+                        min_events = 10000
+                    else:
+                        min_events = 1000
+                    val_dataloader._reset_indices() # Ensure you get a fresh batch
+                    n_events_passing = 0
+                    input_events = []
+                    input_types = []
+                    targets = []
+                    for batch_idx in range(len(val_dataloader)-3):
+                        batch = next(val_dataloader)
+                        x, y, w, types, dsids, mqq, mlv, MCWts, mHs = batch.values()
+                        event_categories = check_category(types, x[...,-1], padding_token, use_torch=True)
+                        outputs = model(x[...,:N_Real_Vars-int(EXCLUDE_TAG)], types)
+                        truths = (x[...,-1]>=2)*2 + (x[...,-1]==1)
+                        perfect_reco = ((outputs.argmax(dim=-1) == truths) | (types==padding_token)).all(dim=-1)
+                        mask = (event_categories==category) & (perfect_reco == success)
+                        if mask.sum() == 0:
+                            continue
+                        input_events.append(batch['x'][mask, ..., :N_Real_Vars-int(EXCLUDE_TAG)])
+                        input_types.append(types[mask])
+                        targets.append(batch['x'][mask, ..., -1])
+                        n_events_passing += mask.sum()
+                        if n_events_passing >= min_events:
+                            break
+                        if (batch_idx % 10)==9:
+                            print(f"Processing batch {batch_idx}")
+                    if n_events_passing < min_events:
+                        print(f"Only {n_events_passing} events passing for category {category} and success {success}")
+                        continue
+                    input_events = torch.cat(input_events, dim=0)
+                    input_types = torch.cat(input_types, dim=0)
+                    targets = torch.cat(targets, dim=0)
+                    print(f"Found {n_events_passing} events passing for category {category} and success {success}")
+                    # Now do the same analysis as above
+                    # First, get the activations
+                    model_activation_extractor = ModelActivationExtractor(model)
+                    cache = model_activation_extractor.extract_activations((input_events, input_types))
+                    attention_analyzer = AttentionAnalyzer(model, cache)
+                    ota = attention_analyzer.analyze_type_attention(input_types, padding_token, combine_elec_and_muon=COMBINE_LEPTONS_FOR_PLOTS, query_selection=query_selection_fn, key_selection=key_selection_fn, true_inclusion=targets)
+                    ota_selfex = attention_analyzer.analyze_type_attention(input_types, padding_token, combine_elec_and_muon=COMBINE_LEPTONS_FOR_PLOTS, exclude_self=True, query_selection=query_selection_fn, key_selection=key_selection_fn, true_inclusion=targets)
+                    # and now plot using the visualization methods
+                    fig = attention_analyzer.visualize_type_attention(ota, {0: 'e', 1: 'm', 2: 'n', 3: 'l', 4: 's', 5:'p'}, layer_range=range(len(model.attention_blocks)), head_range=range(model.attention_blocks[0].self_attention.num_heads))
+                    plt.suptitle(f"Event category {category}, success {success}, query {query}, key {key}")
+                    plt.tight_layout()
+                    fig.savefig(f'tmpAverageAttn2_cat{category}_success{success}_query{query}_key{key}.png')
+                    fig.show()
+                    if 1: # No point doing self-exclusion if we are requiring the key to be a different truth constituent to the query
+                        fig = attention_analyzer.visualize_type_attention(ota_selfex, {0: 'e', 1: 'm', 2: 'n', 3: 'l', 4: 's', 5:'p'}, layer_range=range(len(model.attention_blocks)), head_range=range(model.attention_blocks[0].self_attention.num_heads))
+                        plt.suptitle(f"Event category {category}, success {success}, query {query}, key {key}, exclude self")
+                        plt.tight_layout()
+                        fig.savefig(f'tmpAverageAttn2SelfEx_cat{category}_success{success}_query{query}_key{key}.png')
+                        fig.show()
+
+
+
 # %% Temporary cell to choose an interesting event to analyze. Look at the true and predicted 
 # inclusion of the event to choose one, then plot the attention weights for the event
 if 1: 

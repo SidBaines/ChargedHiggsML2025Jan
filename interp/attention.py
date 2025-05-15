@@ -10,7 +10,7 @@ import einops
 
 def analyze_object_type_attention(model, cache, object_types, padding_token, 
                                  ret_dict=False, combine_elec_and_muon=False, 
-                                 exclude_self=False):
+                                 exclude_self=False, query_selection=None, key_selection=None, true_inclusion=None):
     """
     Analyze how different object types attend to each other.
     
@@ -22,6 +22,9 @@ def analyze_object_type_attention(model, cache, object_types, padding_token,
         ret_dict: Whether to return results as dict instead of array
         combine_elec_and_muon: Whether to combine electron and muon types
         exclude_self: Whether to exclude self-attention
+        query_selection: Callable or None. Function (object_types, true_inclusion) -> mask [batch, object]
+        key_selection: Callable or None. Function (object_types, true_inclusion) -> mask [batch, object]
+        true_inclusion: Tensor of true inclusion labels [batch, object]
         
     Returns:
         Analysis of attention patterns by object type
@@ -57,8 +60,16 @@ def analyze_object_type_attention(model, cache, object_types, padding_token,
                         continue
                         
                     # Create masks for the query and key object types
-                    query_mask = (object_types == query_type).unsqueeze(-1)  # [batch, query, 1]
-                    key_mask = (object_types == key_type).unsqueeze(1)  # [batch, 1, key]
+                    if query_selection is not None:
+                        query_mask = (query_selection(object_types, true_inclusion) & (object_types == query_type)).unsqueeze(-1)  # [batch, query, 1]
+                    else:
+                        query_mask = (object_types == query_type).unsqueeze(-1)  # [batch, query, 1]
+
+                    if key_selection is not None:
+                        key_mask = (key_selection(object_types, true_inclusion) & (object_types == key_type)).unsqueeze(1)  # [batch, 1, key]
+                    else:
+                        key_mask = (object_types == key_type).unsqueeze(1)  # [batch, 1, key]
+
                     
                     if exclude_self:
                         not_diag_mask = (~(torch.eye(object_types.shape[-1]).to(bool))).unsqueeze(0) # [1 query key]
@@ -107,15 +118,20 @@ class AttentionAnalyzer:
         
     def analyze_type_attention(self, object_types, padding_token, 
                               combine_elec_and_muon=False, 
-                              exclude_self=False):
-        """Analyze attention patterns between object types.
-        
+                              exclude_self=False,
+                              query_selection=None,
+                              key_selection=None,
+                              true_inclusion=None):
+        """Analyze attention patterns between object types, with optional selection on query/key.
+
         Args:
             object_types: Tensor of object types
             padding_token: Token ID for padding
             combine_elec_and_muon: Whether to combine electron and muon types
             exclude_self: Whether to exclude self-attention
-            
+            query_selection: Callable or None. Function (object_types, true_inclusion) -> mask [batch, object]
+            key_selection: Callable or None. Function (object_types, true_inclusion) -> mask [batch, object]
+            true_inclusion: Tensor of true inclusion labels [batch, object]
         Returns:
             Dictionary of attention patterns by layer and head
         """
@@ -125,7 +141,10 @@ class AttentionAnalyzer:
             object_types, 
             padding_token,
             combine_elec_and_muon=combine_elec_and_muon,
-            exclude_self=exclude_self
+            exclude_self=exclude_self,
+            query_selection=query_selection,
+            key_selection=key_selection,
+            true_inclusion=true_inclusion
         )
         
     def visualize_type_attention(self, attention_patterns, type_names, 
