@@ -3,21 +3,37 @@ import time
 ts = []
 ts.append(time.time())
 
-import numpy as np
 import os
-os.environ['OPENBLAS_NUM_THREADS'] = '16'
-os.environ['MKL_NUM_THREADS'] = '16'
-os.environ['OMP_NUM_THREADS'] = '16'
+os.environ['OPENBLAS_NUM_THREADS'] = '8'
+os.environ['MKL_NUM_THREADS'] = '8'
+os.environ['OMP_NUM_THREADS'] = '8'
+import numpy as np
 import torch
 from datetime import datetime
+from jaxtyping import Float
+import einops
+import matplotlib.pyplot as plt
+import matplotlib as mpl
+mpl.use('Agg') # If you want to run in batch mode, and not see the plots made
+# from utils import decode_y_eval_to_info
 from dataloaders.highleveldataloader import ProportionalMemoryMappedDatasetHighLevel
-from torch import nn
+from transformer_lens import HookedTransformer, HookedTransformerConfig
+from transformer_lens.hook_points import HookPoint
+from jaxtyping import Float, Int
+from torch import Tensor, nn
+import einops
 import wandb
 import torch.nn.functional as F
+# from torchmetrics import Accuracy, AUC, ConfusionMatrix
+# from torchmetrics import ConfusionMatrix
+# from torchmetrics.classification import MulticlassAccuracy, MulticlassAUROC
+import matplotlib.pyplot as plt
+from sklearn.metrics import roc_auc_score
 import shutil
 from metrics.highlevelmetrics import HEPMetrics, HEPLoss, init_wandb
-from utils.utils import basic_lr_scheduler
-
+from typing import List
+from utils.utils import DSID_MASS_MAPPING
+sorted_masses = sorted(list(DSID_MASS_MAPPING.values()))
 
 # %%
 timeStr = datetime.now().strftime("%Y%m%d-%H%M%S")
@@ -41,6 +57,7 @@ save_current_script('%s'%(saveDir))
 
 # Some choices about the training process
 # Assumes that the data has already been binarised
+PARAMETRISED_NN = False
 TOSS_UNCERTAIN_TRUTH = True
 if not TOSS_UNCERTAIN_TRUTH:
     raise NotImplementedError # Need to work out what to do (eg. put in a flag so they're not used as training?)
@@ -57,18 +74,20 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 # %%
 # Set up stuff to read in data from bin file
 
-batch_size = 64*4
+batch_size = 64*2
 DATA_PATH = '/data/atlas/baines/20250322v4_highLevel' + '_MetCut'*MET_CUT_ON + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '/'
-# DATA_PATH = '/data/atlas/baines/20250429v1_HighLevelAppliedRecoNNSplit/' # For data which was recostructed using low-level network then the relevant high-level data was calculated
+# DATA_PATH = '/data/atlas/baines/20250429v1_HighLevelAppliedRecoNNSplit/' # For data which was recostructed using low-level network then the relevant high-level data was calculated
 memmap_paths_train = {}
 memmap_paths_val = {}
-channel = 'lvbb'
+channel = 'qqbb'
 n_splits=2
 validation_split_idx=0
 KEEP_DSID= None # a dsid if we only want to keep that DSID in training, or None
 MIN_DSID = None # a dsid if we only want to keep this DSID or above (inclusive) or None
 MAX_DSID = None # a dsid if we only want to keep this DSID or below (inclusive) or None
-assert(sum([i is not None for i in [KEEP_DSID, MIN_DSID, MAX_DSID]])<=1)
+EXCL_DSID = None # a dsid if we only want to exclude that DSID in training, or None
+assert(sum([i is not None for i in [KEEP_DSID, MIN_DSID, MAX_DSID, EXCL_DSID]])<=1)
+assert(not (PARAMETRISED_NN and (KEEP_DSID is not None)))
 means = np.load(f'{DATA_PATH}{channel}_mean.npy')
 stds = np.load(f'{DATA_PATH}{channel}_std.npy')
 for file_name in os.listdir(DATA_PATH):
@@ -89,6 +108,9 @@ for file_name in os.listdir(DATA_PATH):
         elif MAX_DSID is not None: # Train with only certain DSID or below
             if (int(dsid)<=MAX_DSID) or (int(dsid) < 500000) or (int(dsid) > 600000):
                 memmap_paths_train[int(dsid)] = DATA_PATH+file_name
+        elif EXCL_DSID is not None:
+            if (int(dsid)!=EXCL_DSID) or (int(dsid) < 500000) or (int(dsid) > 600000):
+                memmap_paths_train[int(dsid)] = DATA_PATH+file_name
         else: # train with all
             memmap_paths_train[int(dsid)] = DATA_PATH+file_name
     else:
@@ -106,6 +128,7 @@ train_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  means=means,
                  stds=stds,
                  has_eventNumbers=True,
+                 return_pole_mass=PARAMETRISED_NN,
                 #  signal_reweights=np.array([3,3,3,1,1,1,1,1,1,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
@@ -122,6 +145,7 @@ val_dataloader = ProportionalMemoryMappedDatasetHighLevel(
                  means=means,
                  stds=stds,
                  has_eventNumbers=True,
+                 return_pole_mass=PARAMETRISED_NN,
                 #  signal_reweights=np.array([10,9,8,7,6,5,4,3,2,1]),
                 #  signal_reweights=np.array([1e1, 1e1, 1e1, 1e0,1e0,1e0,1e-1,1e-1,1e-1,1e-2]),
 )
@@ -138,6 +162,9 @@ models = {}
 fit_histories = {}
 model_n = 0
 
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
 class ConfigurableNN(nn.Module):
     def __init__(self, N_inputs, N_targets, hidden_layers, dropout_prob=0.0, use_batchnorm=True):
@@ -191,10 +218,12 @@ class ConfigurableNN(nn.Module):
 
 models[model_n] = {
     'model':ConfigurableNN(
-        N_inputs=N_Real_Vars, 
+        N_inputs=N_Real_Vars+int(PARAMETRISED_NN), 
         N_targets=N_TARGETS, 
-        hidden_layers=[400,400,400,400,400],
-        dropout_prob=0.1,
+        # hidden_layers=[400,800,800,400,400],
+        # hidden_layers=[128, 128, 128],
+        hidden_layers=[256, 256, ],
+        dropout_prob=0.0,
         use_batchnorm=False
         ).to(device)
     }
@@ -203,6 +232,9 @@ models[model_n]['model'].summary()
 # %%
 class_weights = [1 for _ in range(N_TARGETS)]
 labels = ['Bkg', 'Lep', 'Had'] # truth==0 is bkg, truth==1 is leptonic decay, truth==2 is hadronic decay
+class_weights_expanded = einops.repeat(torch.Tensor(class_weights), 't -> batch t', batch=batch_size).to(device)
+# Cosine learning rate scheduler parameters
+from utils.utils import basic_lr_scheduler
 
 
 # SHOULD CHANGE WEIGHT DECAY BACK (IT WAS 1e-5 before)
@@ -224,8 +256,9 @@ config = {
         "batch_size": batch_size,
         "wandb":True,
         # "wandb":False,
-        "name":"_"+timeStr+"_HighLevel"+channel+f"_Only{str(KEEP_DSID)}"*(KEEP_DSID is not None)+f"_Min{str(MIN_DSID)}"*(MIN_DSID is not None)+f"_Max{str(MAX_DSID)}"*(MAX_DSID is not None),
-        "weight_decay":2e-5,
+        "name":"_"+timeStr+"_HighLevel"+channel+"_Parametrised"*PARAMETRISED_NN+f"_Only{str(KEEP_DSID)}"*(KEEP_DSID is not None)+f"_Min{str(MIN_DSID)}"*(MIN_DSID is not None)+f"_Max{str(MAX_DSID)}"*(MAX_DSID is not None)+f"_Excl{str(EXCL_DSID)}"*(EXCL_DSID is not None),
+        # "weight_decay":2e-5,
+        "weight_decay":1e-10,
     }
 optimizer = torch.optim.Adam(models[model_n]['model'].parameters(), lr=1e-4, weight_decay=config["weight_decay"])
 if config['wandb']:
@@ -233,10 +266,10 @@ if config['wandb']:
     # wandb.watch(model, log_freq=100)
 
 criterion = HEPLoss(apply_correlation_penalty=False, alpha=1.0)
-train_metrics = HEPMetrics(max_bkg_levels=[200], max_buffer_len=int(train_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[1000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
-val_metrics = HEPMetrics(max_bkg_levels=[200], max_buffer_len=int(val_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=val_dataloader.abs_weight_sums, signal_acceptance_levels=[1000])
-train_metrics_MCWts = HEPMetrics(max_bkg_levels=[200], max_buffer_len=int(train_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[1000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
-val_metrics_MCWts = HEPMetrics(max_bkg_levels=[200], max_buffer_len=int(val_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=val_dataloader.weight_sums, signal_acceptance_levels=[1000])
+train_metrics = HEPMetrics(parametrised_nn=PARAMETRISED_NN, max_bkg_levels=[200], max_buffer_len=int(train_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.abs_weight_sums, signal_acceptance_levels=[1000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
+val_metrics = HEPMetrics(parametrised_nn=PARAMETRISED_NN, max_bkg_levels=[200], max_buffer_len=int(val_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=val_dataloader.abs_weight_sums, signal_acceptance_levels=[1000])
+train_metrics_MCWts = HEPMetrics(parametrised_nn=PARAMETRISED_NN, max_bkg_levels=[200], max_buffer_len=int(train_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=train_dataloader.weight_sums, signal_acceptance_levels=[1000]) # TODO should 'total_weights_per_dsid' here be abs or not-abs
+val_metrics_MCWts = HEPMetrics(parametrised_nn=PARAMETRISED_NN, max_bkg_levels=[200], max_buffer_len=int(val_dataloader.get_total_samples()), channel=channel, total_weights_per_dsid=val_dataloader.weight_sums, signal_acceptance_levels=[1000])
 global_step = 0
 total_train_samples_processed = 0
 
@@ -263,16 +296,22 @@ for epoch in range(num_epochs):
     for batch_idx in range(orig_len_train_dataloader):
         n_step+=1
         global_step += 1
-        # if (batch_idx >= orig_len_train_dataloader-5):
-        #     continue
+        if (batch_idx >= orig_len_train_dataloader-5):
+            continue
         batch = next(train_loader)
-        x, y, mWh, dsid, w, MC_w, mH = batch.values()
+        if PARAMETRISED_NN:
+            x, y, mWh, dsid, w, MC_w, mH, pole_mass = batch.values()
+        else:
+            x, y, mWh, dsid, w, MC_w, mH = batch.values()
         # batch['train_wts']
         # assert(False)
         # x, y, w, mWh, dsid = x.to(device), y.to(device), w.to(device), mWh.to(device), dsid.to(device)
         
         optimizer.zero_grad()
-        outputs = model(x)
+        if PARAMETRISED_NN:
+            outputs = model(torch.cat([x, pole_mass.unsqueeze(-1)], dim=-1))
+        else:
+            outputs = model(x)
         # assert(False)
         loss = criterion(outputs, y, w, config['wandb'], mWh, mH)
         train_loss_epoch += loss.item() * w.sum().item()
@@ -283,6 +322,13 @@ for epoch in range(num_epochs):
         
         # Update training metrics
         total_train_samples_processed += len(y)
+        if PARAMETRISED_NN:
+            # Need to re-do the outputs with each of the different masses as input
+            outputs = torch.zeros(outputs.shape[0], 10, outputs.shape[1]).to(device)
+            for i in range(10):
+                outputs[:, i, :] = model(torch.cat([x, torch.ones_like(pole_mass).unsqueeze(-1)*sorted_masses[i]], dim=-1))
+        else:
+            pass
         train_metrics.update(outputs, y.argmax(dim=-1), w, mWh, dsid, mH)
         train_metrics_MCWts.update(outputs, y.argmax(dim=-1), MC_w, mWh, dsid, mH)
         print_every_steps = 100
@@ -297,8 +343,8 @@ for epoch in range(num_epochs):
             log_level = 2 if ((batch_idx % longer_log_interval) == (longer_log_interval-1)) else 0
             train_metrics.compute_and_log(epoch, prefix="train", step=global_step, log_level=log_level, save=config['wandb'], commit=False)
             train_metrics_MCWts.compute_and_log(epoch, prefix="train_MC", step=global_step, log_level=log_level, save=config['wandb'], commit=True)
-            train_metrics.reset_starts(ks=['sig_sel'])
-            train_metrics_MCWts.reset_starts(ks=['sig_sel'])
+            train_metrics.reset_starts(ks=['sig_sel', 'auc'])
+            train_metrics_MCWts.reset_starts(ks=['sig_sel', 'auc'])
             # Log learning rate
         
     if config['wandb']:
@@ -335,20 +381,35 @@ for epoch in range(num_epochs):
             loss = 0
             wt_sum = 0
             for batch_idx in range(orig_len_val_dataloader):
+                if (batch_idx >= orig_len_val_dataloader-5):
+                    continue
                 batch = next(val_loader)
-                # if (batch_idx >= orig_len_val_dataloader-5):
-                #     continue
 
-                x, y, mWh, dsid, w, MC_w, mH = batch.values()
+                if PARAMETRISED_NN:
+                    x, y, mWh, dsid, w, MC_w, mH, pole_mass = batch.values()
+                else:
+                    x, y, mWh, dsid, w, MC_w, mH = batch.values()
                 # x, y, w, mWh, dsid = x.to(device), y.to(device), w.to(device), mWh.to(device), dsid.to(device)
             
-                outputs = model(x)
+                if PARAMETRISED_NN:
+                    outputs = model(torch.cat([x, pole_mass.unsqueeze(-1)], dim=-1))
+                else:
+                    outputs = model(x)
+
                 loss += criterion(outputs, y, w, config['wandb'], mWh, mH).sum() * w.sum()
                 wt_sum += w.sum()
+                # Now calculate outputs again for each mass point for metrics
+                if PARAMETRISED_NN:
+                    outputs = torch.zeros(outputs.shape[0], 10, outputs.shape[1]).to(device)
+                    for i in range(10):
+                        outputs[:, i, :] = model(torch.cat([x, torch.ones_like(pole_mass).unsqueeze(-1)*sorted_masses[i]], dim=-1))
+                else:
+                    pass
                 val_metrics.update(outputs, y.argmax(dim=-1), w, mWh, dsid, mH)
                 val_metrics_MCWts.update(outputs, y.argmax(dim=-1), MC_w, mWh, dsid, mH)
                 # print('[%d/%d][%d/%d] Val' %(epoch, num_epochs, batch_idx, orig_len_val_dataloader))
             if config['wandb']:
+                wandb.log({"train_samps_processed": total_train_samples_processed}, commit=False)
                 wandb.log({
                     "val/loss_total": loss.item(),
                     "val/loss_ce": loss.item()/wt_sum.item(),

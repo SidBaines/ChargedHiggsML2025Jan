@@ -10,6 +10,20 @@ import typing
 from math import floor
 from copy import copy
 
+DSID_TO_POLE_MASS = {
+    510115: 0.8,
+    510116: 0.9,
+    510117: 1.0,
+    510118: 1.2,
+    510119: 1.4,
+    510120: 1.6,
+    510121: 1.8,
+    510122: 2.0,
+    510123: 2.5,
+    510124: 3.0,
+}
+ALL_SIGNAL_MASSES = torch.tensor(list(DSID_TO_POLE_MASS.values()))
+
 class ProportionalMemoryMappedDatasetHighLevel:
     def __init__(self, 
                  memmap_paths: Dict[int, str],  # DSID to memmap path
@@ -26,6 +40,7 @@ class ProportionalMemoryMappedDatasetHighLevel:
                  means=None,
                  stds=None,
                  has_eventNumbers=False,
+                 return_pole_mass=False,
                  ):
         """
         Initialize a dataset loader with memory-mapped files for each class (DSID)
@@ -45,6 +60,7 @@ class ProportionalMemoryMappedDatasetHighLevel:
         self.signal_reweights = signal_reweights
         self.shuffle_batch = shuffle_batch
         self.has_eventNumbers = has_eventNumbers
+        self.return_pole_mass = return_pole_mass
 
         # Add train/val splitting logic
         self.is_train = is_train
@@ -63,7 +79,9 @@ class ProportionalMemoryMappedDatasetHighLevel:
         self.bkg_weight_sums = 0
         # self.sig_weight_sums = 0
         self.num_signals = 0
-        
+        self.signal_masses = []
+        self.signal_dsids = []
+
         for dsid, path in memmap_paths.items():
             # Assume each memmap has a companion .shape file with total number of samples
             shape_path = path + '.shape'
@@ -96,6 +114,8 @@ class ProportionalMemoryMappedDatasetHighLevel:
                 else:
                     # self.sig_weight_sums += sum_weights
                     self.num_signals += 1
+                    self.signal_masses.append(DSID_TO_POLE_MASS[dsid])
+                    self.signal_dsids.append(dsid)
         if self.signal_reweights is not None:
             assert(len(self.signal_reweights)==self.num_signals)
         
@@ -260,6 +280,11 @@ class ProportionalMemoryMappedDatasetHighLevel:
         mH = torch.from_numpy(batch_samples[:,4])
         if self.has_eventNumbers:
             x = torch.from_numpy(batch_samples[:,6:]) # The index at 5 is the event number for train/val split
+            if self.return_pole_mass:
+                pole_mass = torch.tensor(self.signal_masses)[(torch.from_numpy(batch_samples[:,5]) % len(self.signal_masses)).to(int)]
+                pole_mass[(dsid>=500000) & (dsid<600000)] = ALL_SIGNAL_MASSES[dsid[(dsid>=500000) & (dsid<600000)].to(int)-510115]
+            else:
+                pole_mass = None
         else:
             x = torch.from_numpy(batch_samples[:,5:])
         x = (x - self.means)/self.stds
@@ -271,10 +296,14 @@ class ProportionalMemoryMappedDatasetHighLevel:
         # if False:
             # pin arrays x,y, which allows us to move them to GPU asynchronously (non_blocking=True)
             x, y, mWh, dsid, training_Wts, MC_Wts = x.pin_memory().to(self.device, non_blocking=True), y.pin_memory().to(self.device, non_blocking=True), mWh.pin_memory().to(self.device, non_blocking=True), dsid.pin_memory().to(self.device, non_blocking=True), training_Wts.pin_memory().to(self.device, non_blocking=True), MC_Wts.pin_memory().to(self.device, non_blocking=True)
+            if self.return_pole_mass:
+                pole_mass = pole_mass.pin_memory().to(self.device, non_blocking=True)
         else:
             x, y, mWh, dsid, training_Wts, MC_Wts = x.to(self.device), y.to(self.device), mWh.to(self.device), dsid.to(self.device), training_Wts.to(self.device), MC_Wts.to(self.device)
+            if self.return_pole_mass:
+                pole_mass = pole_mass.to(self.device)
         
-        return {'x':x, 
+        ret_dict = {'x':x, 
                 'y':y, 
                 'mWh':mWh, 
                 'dsid':dsid,
@@ -282,6 +311,9 @@ class ProportionalMemoryMappedDatasetHighLevel:
                 'MC_Wts':MC_Wts,
                 'mH':mH,
         }
+        if self.return_pole_mass:
+            ret_dict['pole_mass'] = pole_mass
+        return ret_dict
 
     def __len__(self):
         """

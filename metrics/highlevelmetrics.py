@@ -29,6 +29,7 @@ class HEPMetrics:
                  total_weights_per_dsid={},
                  mHLimits=[(0,1e10),(95e3, 140e3)],
                  unweighted=False,
+                 parametrised_nn=False,
                  ):
         assert((channel=="lvbb") or (channel=="qqbb"))
         self.channel=channel
@@ -42,7 +43,7 @@ class HEPMetrics:
         self.unweighted = unweighted
         self.class_labels = {0:"bkg", 1:channel}
         self.DSID_MASS_MAPPING = {510115:0.8, 510116:0.9, 510117:1.0, 510118:1.2, 510119:1.4, 510120:1.6, 510121:1.8, 510122:2.0, 510123:2.5, 510124:3.0}
-        
+        self.parametrised_nn = parametrised_nn
         # Mass reconstruction histograms
         # self.mass_bins = mass_bins
         # self.mass_range = mass_range
@@ -52,7 +53,10 @@ class HEPMetrics:
         
     def reset(self):
         # Store all predictions and targets with weights
-        self.all_probs = np.zeros((self.max_buffer_len, self.num_classes))
+        if self.parametrised_nn:
+            self.all_probs = np.zeros((self.max_buffer_len, len(self.DSID_MASS_MAPPING), self.num_classes))
+        else:
+            self.all_probs = np.zeros((self.max_buffer_len, self.num_classes))
         self.all_targets = np.zeros(self.max_buffer_len)
         self.all_weights = np.zeros(self.max_buffer_len)
         self.all_dsids = np.zeros(self.max_buffer_len).astype(int)  # to track dsid for each sample
@@ -78,14 +82,14 @@ class HEPMetrics:
         """
         Args:
             preds: Tensor of shape [batch_size, 3] with predicted probabilities
-                  (columns: background, lvbb, qqbb)
+                  (columns: background, lvbb, qqbb) if not parametrised, otherwise [batch_size, 10, 3] with the second dimension being the pole mass
             targets: Tensor of shape [batch_size] with true class indices
             weights: Tensor of shape [batch_size] with sample weights
             dsid: Tensor of shape [batch_size] with dsid for each sample
         """
         # Convert to probabilities if needed
         if (abs(preds.sum(dim=-1).mean().item()-1)>0.0001):  # If logits are passed
-            probs = F.softmax(preds, dim=1)
+            probs = F.softmax(preds, dim=-1)
         else:
             probs = preds
         n_batch = len(targets)
@@ -117,6 +121,7 @@ class HEPMetrics:
             metrics = {
                 f"{prefix}/accuracy{label}": accuracies[label] for label in accuracies.keys()
             }
+        if log_level > 0:
             auc_scores = self.compute_auc()
             self.starts['auc'] = self.current_update_point
             metrics.update({
@@ -142,23 +147,32 @@ class HEPMetrics:
         if self.unweighted:
             raise NotImplementedError # Just needs a quick fix for the weights, probably shouldn't be done here actually
         # Convert predictions to class indices
-        pred_classes = np.argmax(self.all_probs[self.starts['accuracy']:self.current_update_point], axis=1)
-        # Calculate weighted correct predictions
-        correct = (pred_classes == self.all_targets[self.starts['accuracy']:self.current_update_point])
-        weighted_correct = correct * self.all_weights[self.starts['accuracy']:self.current_update_point]
-        self.total_correct = weighted_correct.sum().item()
-        self.total_weight = self.all_weights[self.starts['accuracy']:self.current_update_point].sum().item()
-        if self.total_weight == 0:
+        if not self.parametrised_nn:
+            pred_classes = np.argmax(self.all_probs[self.starts['accuracy']:self.current_update_point], axis=1)
+            # Calculate weighted correct predictions
+            correct = (pred_classes == self.all_targets[self.starts['accuracy']:self.current_update_point])
+            weighted_correct = correct * self.all_weights[self.starts['accuracy']:self.current_update_point]
+            self.total_correct = weighted_correct.sum().item()
+            self.total_weight = self.all_weights[self.starts['accuracy']:self.current_update_point].sum().item()
+            if self.total_weight == 0:
+                accs = {'':0}
+                accs = {f'_{self.channel}':0}
+            else:
+                accs = {'':self.total_correct / self.total_weight}
+                accs = {f'_{self.channel}':self.total_correct / self.total_weight}
+        else:
+            # For parametrised nn we don't have a single accuracy score, but we do have a score for each signal mass, so leave to default 0
             accs = {'':0}
             accs = {f'_{self.channel}':0}
-        else:
-            accs = {'':self.total_correct / self.total_weight}
-            accs = {f'_{self.channel}':self.total_correct / self.total_weight}
+
 
         bkg_dsids = (self.all_dsids[self.starts['accuracy']:self.current_update_point] < 500000) | (self.all_dsids[self.starts['accuracy']:self.current_update_point] > 600000)
-        for signal_dsid in self.DSID_MASS_MAPPING.keys():
+        for index, signal_dsid in enumerate(sorted(self.DSID_MASS_MAPPING.keys())):
             dsid_sel = (self.all_dsids[self.starts['accuracy']:self.current_update_point] == signal_dsid) | bkg_dsids
-            pred_classes = np.argmax(self.all_probs[self.starts['accuracy']:self.current_update_point], axis=1)
+            if self.parametrised_nn:
+                pred_classes = np.argmax(self.all_probs[self.starts['accuracy']:self.current_update_point, index], axis=-1)
+            else:
+                pred_classes = np.argmax(self.all_probs[self.starts['accuracy']:self.current_update_point], axis=-1)
             correct = (pred_classes == self.all_targets[self.starts['accuracy']:self.current_update_point]) * dsid_sel
             weighted_correct = correct * self.all_weights[self.starts['accuracy']:self.current_update_point] * dsid_sel
             total_correct = weighted_correct.sum().item()
@@ -171,27 +185,56 @@ class HEPMetrics:
     
     def compute_auc(self):
         auc_scores = {}
-        # Create binary targets for this class
-        binary_targets = (self.all_targets[self.starts['auc']:self.current_update_point] == 1)
-        # Get probabilities for this class
-        class_probs = self.all_probs[self.starts['auc']:self.current_update_point, 1]
-        # Compute weighted AUC
-        if len(np.unique(binary_targets)) < 2:
-            return auc_scores
-        # Sort by predicted probability
-        sort_idx = np.argsort(class_probs)
-        sort_idx = sort_idx[::-1]
-        # sorted_probs = class_probs[sort_idx]
-        sorted_targets = binary_targets[sort_idx]
-        sorted_weights = self.all_weights[sort_idx]
-        # Compute weighted TPR and FPR
-        total_pos_weight = (sorted_targets * sorted_weights).sum()
-        total_neg_weight = ((1 - sorted_targets) * sorted_weights).sum()
-        tpr = np.cumsum(sorted_targets * sorted_weights, axis=0) / total_pos_weight
-        fpr = np.cumsum((1 - sorted_targets) * sorted_weights, axis=0) / total_neg_weight
-        # Compute AUC using trapezoidal rule
-        auc = np.trapz(tpr, fpr).item()
-        auc_scores[self.channel] = auc
+        for (mH_lower, mH_upper) in self.mH_Limits:
+            mH_mask = ((self.all_mHs >= mH_lower) & (self.all_mHs <= mH_upper))[self.starts['sig_sel']:self.current_update_point]
+            if not self.parametrised_nn:
+                # Create binary targets for this class
+                binary_targets = (self.all_targets[self.starts['auc']:self.current_update_point] == 1)
+                # Get probabilities for this class
+                class_probs = self.all_probs[self.starts['auc']:self.current_update_point, 1]
+                # Compute weighted AUC
+                if len(np.unique(binary_targets)) < 2:
+                    return auc_scores
+                # Sort by predicted probability
+                sort_idx = np.argsort(class_probs)
+                sort_idx = sort_idx[::-1]
+                # sorted_probs = class_probs[sort_idx]
+                sorted_targets = binary_targets[sort_idx]
+                sorted_weights = self.all_weights[self.starts['auc']:self.current_update_point][sort_idx]
+                # Compute weighted TPR and FPR
+                total_pos_weight = (sorted_targets * sorted_weights).sum()
+                total_neg_weight = ((1 - sorted_targets) * sorted_weights).sum()
+                tpr = np.cumsum(sorted_targets * sorted_weights, axis=0) / total_pos_weight
+                fpr = np.cumsum((1 - sorted_targets) * sorted_weights, axis=0) / total_neg_weight
+                # Compute AUC using trapezoidal rule
+                auc = np.trapz(tpr, fpr).item()
+                auc_scores[f'{self.channel}_mHlow{int(mH_lower*1e-3)}_mHhigh{int(mH_upper*1e-3)}'] = auc
+            else:
+                # For parametrised nn we don't have a single auc score, but we do have a score for each signal mass, so leave to default 0
+                auc_scores[f'{self.channel}_mHlow{int(mH_lower*1e-3)}_mHhigh{int(mH_upper*1e-3)}'] = 0
+        # And now per-signal mass auc scores
+        for index, signal_dsid in enumerate(sorted(self.DSID_MASS_MAPPING.keys())):
+            for (mH_lower, mH_upper) in self.mH_Limits:
+                mH_mask = ((self.all_mHs >= mH_lower) & (self.all_mHs <= mH_upper))[self.starts['sig_sel']:self.current_update_point]
+                bkg_dsids = (self.all_dsids[self.starts['auc']:self.current_update_point] < 500000) | (self.all_dsids[self.starts['auc']:self.current_update_point] > 600000)
+                dsid_sel = (self.all_dsids[self.starts['auc']:self.current_update_point] == signal_dsid) | bkg_dsids
+                binary_targets = (self.all_targets[self.starts['auc']:self.current_update_point] == 1)[dsid_sel&mH_mask]
+                if self.parametrised_nn:
+                    class_probs = self.all_probs[self.starts['auc']:self.current_update_point, index, 1][dsid_sel&mH_mask]
+                else:
+                    class_probs = self.all_probs[self.starts['auc']:self.current_update_point, 1][dsid_sel&mH_mask]
+                if len(np.unique(binary_targets)) < 2:
+                    continue
+                sort_idx = np.argsort(class_probs)
+                sort_idx = sort_idx[::-1]
+                sorted_targets = binary_targets[sort_idx]
+                sorted_weights = self.all_weights[self.starts['auc']:self.current_update_point][dsid_sel&mH_mask][sort_idx]
+                total_pos_weight = (sorted_targets * sorted_weights).sum()
+                total_neg_weight = ((1 - sorted_targets) * sorted_weights).sum()
+                tpr = np.cumsum(sorted_targets * sorted_weights, axis=0) / total_pos_weight
+                fpr = np.cumsum((1 - sorted_targets) * sorted_weights, axis=0) / total_neg_weight
+                auc = np.trapz(tpr, fpr).item()
+                auc_scores[f'{self.channel}_{self.DSID_MASS_MAPPING[signal_dsid]}_mHlow{int(mH_lower*1e-3)}_mHhigh{int(mH_upper*1e-3)}'] = auc
         return auc_scores
     
     def compute_signal_selection_metrics(self, min_mass=0):
@@ -207,45 +250,86 @@ class HEPMetrics:
 
         # Initialize results dictionary
         results = {}
+        if self.parametrised_nn:
+            # We have to do the background estimation separately for each pole mass
+            for index, signal_dsid in enumerate(sorted(self.DSID_MASS_MAPPING.keys())):
+                # Set up some stuff that we only want to do once if possible
+                # weight_mult_factors = np.array([self.total_weights_per_dsid[dsid.item()]/self.processed_weight_sums_per_dsid[dsid.item()] for dsid in self.all_dsids[self.starts['sig_sel']:self.current_update_point]])
+                weight_mult_factors = np.array([self.total_weights_per_dsid[dsid.item()]/self.processed_weight_sums_per_dsid[dsid.item()] if self.processed_weight_sums_per_dsid[dsid.item()]!=0 else 0 for dsid in self.all_dsids[self.starts['sig_sel']:self.current_update_point]])
+                # TODO Do we want to sort the vectors (only those used by, and only to be used for, the threshold calculation stuff) here? Or keep doing it all together later. Basically might help with speed
+                sort_idx = np.argsort(self.all_probs[self.starts['sig_sel']:self.current_update_point, index, 0])
+                sorted_probs_bkg = self.all_probs[self.starts['sig_sel']:self.current_update_point][sort_idx, index, 0]
+                # sorted_weights = self.all_weights[self.starts['sig_sel']:self.current_update_point][sort_idx]
 
-        # Set up some stuff that we only want to do once if possible
-        # weight_mult_factors = np.array([self.total_weights_per_dsid[dsid.item()]/self.processed_weight_sums_per_dsid[dsid.item()] for dsid in self.all_dsids[self.starts['sig_sel']:self.current_update_point]])
-        weight_mult_factors = np.array([self.total_weights_per_dsid[dsid.item()]/self.processed_weight_sums_per_dsid[dsid.item()] if self.processed_weight_sums_per_dsid[dsid.item()]!=0 else 0 for dsid in self.all_dsids[self.starts['sig_sel']:self.current_update_point]])
-        # TODO Do we want to sort the vectors (only those used by, and only to be used for, the threshold calculation stuff) here? Or keep doing it all together later. Basically might help with speed
-        sort_idx = np.argsort(self.all_probs[self.starts['sig_sel']:self.current_update_point, 0])
-        sorted_probs_bkg = self.all_probs[self.starts['sig_sel']:self.current_update_point][sort_idx, 0]
-        # sorted_weights = self.all_weights[self.starts['sig_sel']:self.current_update_point][sort_idx]
+                for (mH_lower, mH_upper) in self.mH_Limits:
+                    mH_mask = ((self.all_mHs >= mH_lower) & (self.all_mHs <= mH_upper))[self.starts['sig_sel']:self.current_update_point].astype(float)
+                    for max_bkg_level in self.max_bkg_levels:
+                        # Calculate the threshold for lvbb background
+                        cum_weights = np.cumsum((self.all_weights[self.starts['sig_sel']:self.current_update_point] * weight_mult_factors * mH_mask * bkg_mask * min_mass_mask)[sort_idx], axis=0)
 
-        for (mH_lower, mH_upper) in self.mH_Limits:
-            mH_mask = ((self.all_mHs >= mH_lower) & (self.all_mHs <= mH_upper))[self.starts['sig_sel']:self.current_update_point].astype(float)
-            for max_bkg_level in self.max_bkg_levels:
-                # Calculate the threshold for lvbb background
-                cum_weights = np.cumsum((self.all_weights[self.starts['sig_sel']:self.current_update_point] * weight_mult_factors * mH_mask * bkg_mask * min_mass_mask)[sort_idx], axis=0)
+                        if cum_weights[-1]<max_bkg_level:
+                            thresh = 1.0
+                        else:
+                            # idx = np.searchsorted(cum_weights, max_bkg_level)
+                            idx = np.argmax(cum_weights>max_bkg_level) # TODO currently we are getting the first value where it's above the level; perhaps we should get the last value where it's below and then add one
+                            thresh = sorted_probs_bkg[idx]
+                        
+                        above_thresh = (self.all_probs[self.starts['sig_sel']:self.current_update_point, index, 0] < thresh)
+                        signal_dsid_sel=(self.all_dsids == signal_dsid)[self.starts['sig_sel']:self.current_update_point].astype(float)
+                        if signal_dsid in self.processed_weight_sums_per_dsid.keys():
+                            # if self.processed_weight_sums_per_dsid[signal_dsid]!=0:
+                            if 1:
+                                weight_scale_up_factor = self.total_weights_per_dsid[signal_dsid]/self.processed_weight_sums_per_dsid[signal_dsid]
+                            # else:
+                            #     weight_scale_up_factor = 0
+                        else:
+                            weight_scale_up_factor = 0
+                        selected = (above_thresh * mH_mask * min_mass_mask)
 
-                if cum_weights[-1]<max_bkg_level:
-                    thresh = 1.0
-                else:
-                    # idx = np.searchsorted(cum_weights, max_bkg_level)
-                    idx = np.argmax(cum_weights>max_bkg_level) # TODO currently we are getting the first value where it's above the level; perhaps we should get the last value where it's below and then add one
-                    thresh = sorted_probs_bkg[idx]
-                
-                above_thresh = (self.all_probs[self.starts['sig_sel']:self.current_update_point, 0] < thresh)
-                for signal_dsid in self.DSID_MASS_MAPPING.keys():
-                    signal_dsid_sel=(self.all_dsids == signal_dsid)[self.starts['sig_sel']:self.current_update_point].astype(float)
-                    if signal_dsid in self.processed_weight_sums_per_dsid.keys():
-                        # if self.processed_weight_sums_per_dsid[signal_dsid]!=0:
-                        if 1:
-                            weight_scale_up_factor = self.total_weights_per_dsid[signal_dsid]/self.processed_weight_sums_per_dsid[signal_dsid]
-                        # else:
-                        #     weight_scale_up_factor = 0
+                        results[(max_bkg_level, signal_dsid, (mH_lower, mH_upper))] = {
+                            f'{self.channel}_bkg_threshold': thresh,
+                            f'sig_{self.channel}_expected': (selected * sig_mask * signal_dsid_sel * self.all_weights[self.starts['sig_sel']:self.current_update_point]).sum()*weight_scale_up_factor,
+                        }
+        else:
+            # We can do the background estimation for all pole masses at once
+            # Set up some stuff that we only want to do once if possible
+            # weight_mult_factors = np.array([self.total_weights_per_dsid[dsid.item()]/self.processed_weight_sums_per_dsid[dsid.item()] for dsid in self.all_dsids[self.starts['sig_sel']:self.current_update_point]])
+            weight_mult_factors = np.array([self.total_weights_per_dsid[dsid.item()]/self.processed_weight_sums_per_dsid[dsid.item()] if self.processed_weight_sums_per_dsid[dsid.item()]!=0 else 0 for dsid in self.all_dsids[self.starts['sig_sel']:self.current_update_point]])
+            # TODO Do we want to sort the vectors (only those used by, and only to be used for, the threshold calculation stuff) here? Or keep doing it all together later. Basically might help with speed
+            sort_idx = np.argsort(self.all_probs[self.starts['sig_sel']:self.current_update_point, 0])
+            sorted_probs_bkg = self.all_probs[self.starts['sig_sel']:self.current_update_point][sort_idx, 0]
+            # sorted_weights = self.all_weights[self.starts['sig_sel']:self.current_update_point][sort_idx]
+
+            for (mH_lower, mH_upper) in self.mH_Limits:
+                mH_mask = ((self.all_mHs >= mH_lower) & (self.all_mHs <= mH_upper))[self.starts['sig_sel']:self.current_update_point].astype(float)
+                for max_bkg_level in self.max_bkg_levels:
+                    # Calculate the threshold for lvbb background
+                    cum_weights = np.cumsum((self.all_weights[self.starts['sig_sel']:self.current_update_point] * weight_mult_factors * mH_mask * bkg_mask * min_mass_mask)[sort_idx], axis=0)
+
+                    if cum_weights[-1]<max_bkg_level:
+                        thresh = 1.0
                     else:
-                        weight_scale_up_factor = 0
-                    selected = (above_thresh * mH_mask * min_mass_mask)
+                        # idx = np.searchsorted(cum_weights, max_bkg_level)
+                        idx = np.argmax(cum_weights>max_bkg_level) # TODO currently we are getting the first value where it's above the level; perhaps we should get the last value where it's below and then add one
+                        thresh = sorted_probs_bkg[idx]
+                    
+                    above_thresh = (self.all_probs[self.starts['sig_sel']:self.current_update_point, 0] < thresh)
+                    for signal_dsid in self.DSID_MASS_MAPPING.keys():
+                        signal_dsid_sel=(self.all_dsids == signal_dsid)[self.starts['sig_sel']:self.current_update_point].astype(float)
+                        if signal_dsid in self.processed_weight_sums_per_dsid.keys():
+                            # if self.processed_weight_sums_per_dsid[signal_dsid]!=0:
+                            if 1:
+                                weight_scale_up_factor = self.total_weights_per_dsid[signal_dsid]/self.processed_weight_sums_per_dsid[signal_dsid]
+                            # else:
+                            #     weight_scale_up_factor = 0
+                        else:
+                            weight_scale_up_factor = 0
+                        selected = (above_thresh * mH_mask * min_mass_mask)
 
-                    results[(max_bkg_level, signal_dsid, (mH_lower, mH_upper))] = {
-                        f'{self.channel}_bkg_threshold': thresh,
-                        f'sig_{self.channel}_expected': (selected * sig_mask * signal_dsid_sel * self.all_weights[self.starts['sig_sel']:self.current_update_point]).sum()*weight_scale_up_factor,
-                    }
+                        results[(max_bkg_level, signal_dsid, (mH_lower, mH_upper))] = {
+                            f'{self.channel}_bkg_threshold': thresh,
+                            f'sig_{self.channel}_expected': (selected * sig_mask * signal_dsid_sel * self.all_weights[self.starts['sig_sel']:self.current_update_point]).sum()*weight_scale_up_factor,
+                        }
         return results
 
 # Modified loss class with wandb logging
