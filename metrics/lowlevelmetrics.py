@@ -213,32 +213,50 @@ class HEPMetrics:
     
     def compute_auc(self):
         auc_scores = {}
-        assert(self.num_classes==3) # This has been written with specifically 1 bkg and 2 signal in mind
-        for class_idx in range(1, self.num_classes):
+        for (mH_lower, mH_upper) in self.mH_Limits:
+            mH_mask = ((self.all_mHs >= mH_lower) & (self.all_mHs <= mH_upper))[self.starts['auc']:self.current_update_point]
             # Create binary targets for this class
-            binary_targets = (self.all_targets[self.starts['auc']:self.current_update_point] == class_idx)
+            binary_targets = (self.all_targets[self.starts['auc']:self.current_update_point] == 1)
             # Get probabilities for this class
-            class_probs = self.all_probs[self.starts['auc']:self.current_update_point, class_idx]
-            other_sig_probs = self.all_probs[self.starts['auc']:self.current_update_point, self.num_classes - class_idx]
+            class_probs = self.all_probs[self.starts['auc']:self.current_update_point, 1]
             # Compute weighted AUC
             if len(np.unique(binary_targets)) < 2:
-                # Only one class present, skip
+                # return auc_scores
                 continue
             # Sort by predicted probability
             sort_idx = np.argsort(class_probs)
             sort_idx = sort_idx[::-1]
             # sorted_probs = class_probs[sort_idx]
             sorted_targets = binary_targets[sort_idx]
-            sorted_weights = self.all_weights[sort_idx]
-            sorted_this_sig_choice = (class_probs > other_sig_probs)[sort_idx]
+            sorted_weights = self.all_weights[self.starts['auc']:self.current_update_point][sort_idx]
             # Compute weighted TPR and FPR
-            total_pos_weight = (sorted_targets * sorted_weights * sorted_this_sig_choice).sum()
-            total_neg_weight = ((1 - sorted_targets) * sorted_weights * sorted_this_sig_choice).sum()
-            tpr = np.cumsum(sorted_targets * sorted_weights * sorted_this_sig_choice, axis=0) / total_pos_weight
-            fpr = np.cumsum((1 - sorted_targets) * sorted_weights * sorted_this_sig_choice, axis=0) / total_neg_weight
+            total_pos_weight = (sorted_targets * sorted_weights).sum()
+            total_neg_weight = ((1 - sorted_targets) * sorted_weights).sum()
+            tpr = np.cumsum(sorted_targets * sorted_weights, axis=0) / total_pos_weight
+            fpr = np.cumsum((1 - sorted_targets) * sorted_weights, axis=0) / total_neg_weight
             # Compute AUC using trapezoidal rule
             auc = np.trapz(tpr, fpr).item()
-            auc_scores[self.class_labels[class_idx]] = auc
+            auc_scores[f'{self.channel}_mHlow{int(mH_lower*1e-3)}_mHhigh{int(mH_upper*1e-3)}'] = auc
+        # And now per-signal mass auc scores
+        for index, signal_dsid in enumerate(sorted(self.DSID_MASS_MAPPING.keys())):
+            for (mH_lower, mH_upper) in self.mH_Limits:
+                mH_mask = ((self.all_mHs >= mH_lower) & (self.all_mHs <= mH_upper))[self.starts['auc']:self.current_update_point]
+                bkg_dsids = (self.all_dsids[self.starts['auc']:self.current_update_point] < 500000) | (self.all_dsids[self.starts['auc']:self.current_update_point] > 600000)
+                dsid_sel = (self.all_dsids[self.starts['auc']:self.current_update_point] == signal_dsid) | bkg_dsids
+                binary_targets = (self.all_targets[self.starts['auc']:self.current_update_point] == 1)[dsid_sel&mH_mask]
+                class_probs = self.all_probs[self.starts['auc']:self.current_update_point, 1][dsid_sel&mH_mask]
+                if len(np.unique(binary_targets)) < 2:
+                    continue
+                sort_idx = np.argsort(class_probs)
+                sort_idx = sort_idx[::-1]
+                sorted_targets = binary_targets[sort_idx]
+                sorted_weights = self.all_weights[self.starts['auc']:self.current_update_point][dsid_sel&mH_mask][sort_idx]
+                total_pos_weight = (sorted_targets * sorted_weights).sum()
+                total_neg_weight = ((1 - sorted_targets) * sorted_weights).sum()
+                tpr = np.cumsum(sorted_targets * sorted_weights, axis=0) / total_pos_weight
+                fpr = np.cumsum((1 - sorted_targets) * sorted_weights, axis=0) / total_neg_weight
+                auc = np.trapz(tpr, fpr).item()
+                auc_scores[f'{self.channel}_{self.DSID_MASS_MAPPING[signal_dsid]}_mHlow{int(mH_lower*1e-3)}_mHhigh{int(mH_upper*1e-3)}'] = auc
         return auc_scores
     
     def compute_signal_selection_metrics(self, min_mass=0):

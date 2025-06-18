@@ -13,11 +13,9 @@ import shutil
 
 ######## My imports ########
 from dataloaders.lowleveldataloader import ProportionalMemoryMappedDataset
-from models.models import DeepSetsWithResidualSelfAttentionVariableTrueSkipClassifier
 from metrics.lowlevelmetrics import HEPMetrics, HEPLoss, init_wandb
 from utils.utils import basic_lr_scheduler
-from models.models import TestNetworkClassifier, GNNParticleClassifier, TestNetworkClassifierImmediatePool
-from interp.mechinterputils import run_with_cache_and_bottleneck
+from models.models import TestNetwork
 
 
 
@@ -51,9 +49,9 @@ ONLY_CORRECT_RECO_FOR_TRAINING = True
 REMOVE_WHERE_TRUTH_WOULD_BE_CUT=False # Should be false for classification train/test, and false for reco test
 INCLUDE_INCLUSION_TAGS = True # This is only for newer files which contain these tags
 # Want to re-do the prepdata and calculate the mH on the fly (using the truth reco) so we can put the correlation loss back in/trust the mH calculations
-INCLUDE_ALL_SELECTIONS = True
-INCLUDE_NEGATIVE_SELECTIONS = True
-USE_OLD_TRUTH_SETTING = False
+INCLUDE_ALL_SELECTIONS = False
+INCLUDE_NEGATIVE_SELECTIONS = False
+USE_OLD_TRUTH_SETTING = True
 PHI_ROTATED = False
 USE_LORENTZ_INVARIANT_FEATURES = True
 TAG_INFO_INPUT = True
@@ -103,7 +101,7 @@ if INCLUDE_INCLUSION_TAGS:
 
 ############   DATA LOADING CONFIG  ################
 batch_size = 256
-target_channel = 'lvbb'
+target_channel = 'qqbb'
 validation_split_idx=0
 n_splits=2
 KEEP_DSID= None # a dsid if we only want to keep that DSID in training, or None
@@ -113,9 +111,13 @@ MAX_DSID = None # a dsid if we only want to keep this DSID or below (inclusive) 
 
 ############   MODEL TRAINING CONFIG  ################
 MODEL_ARCH="DEEPSETS_RESIDUAL_VARIABLE_TRUESKIP"
-ATTENTION_OUTPUT_BOTTLENECK_SIZE = 1
-USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION = True
-num_blocks_variable=10
+ATTENTION_OUTPUT_BOTTLENECK_SIZE = None
+USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION = False
+if USE_ENTROPY_TO_ENCOURAGE_SIMPLEATTENTION or (ATTENTION_OUTPUT_BOTTLENECK_SIZE is not None):
+    from interp.mechinterputils import run_with_cache_and_bottleneck
+else:
+    run_with_cache_and_bottleneck = None
+num_blocks_variable=3
 model_cfg = {'d_attn':None, 'include_mlp':True, 'd_model': 152, 'd_mlp': 400, 'num_blocks':num_blocks_variable, 'dropout_p': 0.0, "embedding_size":N_CTX, "num_heads":4}
 
 num_epochs = 30
@@ -154,7 +156,8 @@ config = {
 ##############################################
 #########       DATA LOADING     #############
 ##############################################
-DATA_PATH = '/data/atlas/baines/20250321v2_AppliedRecoNNSplit_WithEventNumbers_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5' + '_RemovedWrongTruthForTraining'* ONLY_CORRECT_TRUTH_FOR_TRAINING + '_RemovedWrongRecoForTraining'*ONLY_CORRECT_RECO_FOR_TRAINING + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + f'{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
+# DATA_PATH = '/data/atlas/baines/20250321v2_AppliedRecoNNSplit_WithEventNumbers_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5' + '_RemovedWrongTruthForTraining'* ONLY_CORRECT_TRUTH_FOR_TRAINING + '_RemovedWrongRecoForTraining'*ONLY_CORRECT_RECO_FOR_TRAINING + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + f'{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
+DATA_PATH = '/data/atlas/baines/20250618v2_Split_WithEventNumbers_WithSmallRJetCloseToLJetRemovalDeltaRLT0.5' + '_RemovedWrongTruthForTraining'* ONLY_CORRECT_TRUTH_FOR_TRAINING + '_NotPhiRotated'*(not PHI_ROTATED) + '_XbbTagged'*IS_XBB_TAGGED + '_WithRecoMasses_' + f'{max_n_objs_in_file}' + '_PtPhiEtaM'*CONVERT_TO_PT_PHI_ETA_M + '_MetCut'*MET_CUT_ON + '_XbbRequired'*REQUIRE_XBB + '_mHSel'*MH_SEL + '_OldTruth'*USE_OLD_TRUTH_SETTING + '_RemovedUncertainTruth'*TOSS_UNCERTAIN_TRUTH +  '_WithTagInfo'*INCLUDE_TAG_INFO + '_KeepAllOldSel'*INCLUDE_ALL_SELECTIONS  + 'IncludingNegative'*INCLUDE_NEGATIVE_SELECTIONS + '_RemovedEventsWhereTruthIsCutByMaxObjs'*REMOVE_WHERE_TRUTH_WOULD_BE_CUT +'/'
 # assert(validation_split_idx<n_splits)
 target_channel_num = {'lvbb':1, 'qqbb':2}[target_channel]
 if 'AppliedRecoNN' in DATA_PATH: # This will have an extra variable, for the reco networks selection
@@ -250,7 +253,8 @@ print(val_dataloader.get_total_samples())
 ########       CREATE MODEL      #############
 ##############################################
 # model = DeepSetsWithResidualSelfAttentionVariableTrueSkipClassifier(input_dim=N_Real_Vars, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
-model = TestNetworkClassifier(hidden_dim_attn=model_cfg['d_attn'], use_lorentz_invariant_features=USE_LORENTZ_INVARIANT_FEATURES, bottleneck_attention=ATTENTION_OUTPUT_BOTTLENECK_SIZE, feature_set=['phi', 'eta', 'pt', 'm']+['tag']*TAG_INFO_INPUT, num_particle_types=N_CTX, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
+# model = TestNetworkClassifier(hidden_dim_attn=model_cfg['d_attn'], use_lorentz_invariant_features=USE_LORENTZ_INVARIANT_FEATURES, bottleneck_attention=ATTENTION_OUTPUT_BOTTLENECK_SIZE, feature_set=['phi', 'eta', 'pt', 'm']+['tag']*TAG_INFO_INPUT, num_particle_types=N_CTX, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
+model = TestNetwork(is_reconstruction_model=False, hidden_dim_attn=model_cfg['d_attn'], use_lorentz_invariant_features=USE_LORENTZ_INVARIANT_FEATURES, bottleneck_attention=ATTENTION_OUTPUT_BOTTLENECK_SIZE, feature_set=['phi', 'eta', 'pt', 'm']+['tag']*TAG_INFO_INPUT, num_particle_types=N_CTX, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
 # model = TestNetworkClassifierImmediatePool(hidden_dim_attn=model_cfg['d_attn'], use_lorentz_invariant_features=USE_LORENTZ_INVARIANT_FEATURES, bottleneck_attention=ATTENTION_OUTPUT_BOTTLENECK_SIZE, feature_set=['phi', 'eta', 'pt', 'm']+['tag']*TAG_INFO_INPUT, num_particle_types=N_CTX, hidden_dim_mlp=model_cfg['d_mlp'], include_mlp=model_cfg['include_mlp'], num_attention_blocks=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  dropout_p=model_cfg['dropout_p'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
 # model = GNNParticleClassifier(conv_type='edge', feature_set=['phi', 'eta', 'pt', 'm']+['tag']*TAG_INFO_INPUT, num_particle_types=N_CTX, num_layers=model_cfg['num_blocks'], hidden_dim=model_cfg['d_model'],  num_heads=model_cfg['num_heads'], embedding_size=model_cfg['embedding_size']).to(device)
 optimizer = torch.optim.Adam(model.parameters(), lr=1e-4, weight_decay=config['weight_decay'])
@@ -435,7 +439,8 @@ for epoch in range(num_epochs):
         try:
             modelSaveDir = "%s/models/%s_Nplits%d_ValIdx%d/"%(saveDir, target_channel, n_splits, validation_split_idx)
             os.makedirs(modelSaveDir, exist_ok=True)
-            torch.save(model.state_dict(), modelSaveDir + "/chkpt%d_%d" %(epoch, global_step) + '.pth')
+            # torch.save(model.state_dict(), modelSaveDir + "/chkpt%d_%d" %(epoch, global_step) + '.pth')
+            torch.save(model.state_dict(), modelSaveDir + "/chkpt_latest.pth")
             have_saved_a_model = True
         except:
             pass
@@ -448,4 +453,5 @@ for epoch in range(num_epochs):
 if not have_saved_a_model:
     modelSaveDir = "%s/models/%s_Nplits%d_ValIdx%d/"%(saveDir, target_channel, n_splits, validation_split_idx)
     os.makedirs(modelSaveDir, exist_ok=True)
-    torch.save(model.state_dict(), modelSaveDir + "/chkpt%d" %(global_step) + '.pth')
+    # torch.save(model.state_dict(), modelSaveDir + "/chkpt%d" %(global_step) + '.pth')
+    torch.save(model.state_dict(), modelSaveDir + "/chkpt_latest.pth")

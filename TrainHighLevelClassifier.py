@@ -24,6 +24,7 @@ from torch import Tensor, nn
 import einops
 import wandb
 import torch.nn.functional as F
+from models.models import ConfigurableNN
 # from torchmetrics import Accuracy, AUC, ConfusionMatrix
 # from torchmetrics import ConfusionMatrix
 # from torchmetrics.classification import MulticlassAccuracy, MulticlassAUROC
@@ -162,55 +163,6 @@ models = {}
 fit_histories = {}
 model_n = 0
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
-class ConfigurableNN(nn.Module):
-    def __init__(self, N_inputs, N_targets, hidden_layers, dropout_prob=0.0, use_batchnorm=True):
-        """
-        Initializes a configurable neural network.
-        Args:
-            N_inputs (int): Number of input features.
-            N_targets (int): Number of output neurons (for classification).
-            hidden_layers (list of int): List of integers specifying the number of neurons in each hidden layer.
-            dropout_prob (float): Probability of dropout. 0.0 means no dropout.
-            use_batchnorm (bool): Whether to use batch normalization in each layer.
-        """
-        super(ConfigurableNN, self).__init__()
-        layers = []
-        self.N_inputs = N_inputs
-        self.N_targets = N_targets
-        input_dim = self.N_inputs
-        for hidden_dim in hidden_layers:
-            # Input to first hidden layer and subsequent hidden layers
-            layers.append(nn.Linear(input_dim, hidden_dim))
-            if use_batchnorm:
-                layers.append(nn.BatchNorm1d(hidden_dim))
-            layers.append(nn.ReLU())  # Activation function
-            if dropout_prob > 0.0:
-                layers.append(nn.Dropout(p=dropout_prob))
-            input_dim = hidden_dim
-        # Output layer
-        layers.append(nn.Linear(input_dim, N_targets))
-        self.network = nn.Sequential(*layers)
-
-    def forward(self, x):
-        return self.network(x)
-
-    def summary(self):
-        """
-        Prints the summary of the network architecture.
-        """
-        num_params = sum(p.numel() for p in self.parameters())
-        print(f"Network Summary:\n{'-'*20}")
-        print(f"Total Parameters: {num_params}")
-        print(f"Input size: {self.N_inputs}")
-        print(f"Output size: {self.N_targets}")
-        print(f"Layers:")
-        for i, layer in enumerate(self.network):
-            print(f"Layer {i+1}: {layer}")
-        print(f"{'-'*20}")
 
 
 # models[model_n] = {'model' : Net(model_cfg).to(device), 'inputs' : inputs}
